@@ -36,6 +36,10 @@ class Spec(object):
         self.stop_on = stop_on.copy()
         self.parameters = parameters.copy()
         
+    @property
+    def quick_parameters(self):
+        return QuickParameterObject(self.parameters)
+        
     def dump(self, stream):
         yaml_obj = dict(id=self.id,
                         model=self.model,
@@ -45,6 +49,37 @@ class Spec(object):
             
     def __str__(self):
         return self.id
+
+
+class ParameterValueError(Exception):
+    def __init__(self, name, value, reason=None):
+        super(ParameterValueError, self).__init__({'name':name, 
+                                                   'value':value, 
+                                                   'reason':reason})
+
+class MissingParameterError(Exception):
+    def __init__(self, name):
+        super(MissingParameterError, self).__init__(name)
+    
+class QuickParameterObject(object):
+    
+    def __init__(self, parameters):
+        self.__dict__ = parameters
+        
+    def is_between(self, name, min_value, max_value, value_type=int):
+        value = getattr(self, name)
+        if not isinstance(value, value_type) or value < min_value \
+                                            or value > max_value:
+            raise ParameterValueError(name, value, 
+                                      "Must be a {0} in the range {1} to {2}."\
+                                      .format(value_type, min_value, max_value))
+        
+    def __getattr__(self, name):
+        raise MissingParameterError(name)
+        
+    def __repr__(self):
+        return "{0}({1})".format(self.__class__.__name__, self.__dict__)
+
 
 class SpecFileError(Exception):
     def __init__(self, path, cause):
