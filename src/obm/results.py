@@ -7,6 +7,25 @@ Created on Dec 30, 2012
 import numpy as np
 import cv2
 import pickle
+import specs
+import models
+import tables; tb = tables # fucking eclipse finds errors otherwise
+
+class RawResult(tb.IsDescription):
+    id = specs.ID_COLUMN
+    mass = tb.Float32Col()
+    perimeter = tb.Float32Col()
+    heights = tb.UInt16Col(shape=(1, models.COLUMNS))
+    max_height = tb.Float32Col()
+    mean_height = tb.Float32Col()
+    row_ffts = tb.Float32Col(shape=(models.ROWS, models.COLUMNS))
+    coverages = tb.Float32Col(shape=(1, models.ROWS))
+    convexity_max = tb.Float32Col()
+    convexity_mean = tb.Float32Col()
+    convexity_std = tb.Float32Col()
+    x_correlations = tb.Float32Col(shape=(models.ROWS, models.COLUMNS/2-1))
+    overhangs = tb.UInt16Col(shape=(1, models.COLUMNS))
+
 
 def from_model(model):
     return Result(model.render())

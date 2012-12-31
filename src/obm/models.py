@@ -8,12 +8,44 @@ import numpy as np
 import cv2
 import random as rdm
 import specs
+import tables; tb = tables
+import utils
+
+ROWS = 64
+COLUMNS = 256
+MODELS_NODE = "models"
+
+class ModelResult(tb.IsDescription):
+    id = tb.Int32Col(dflt=0, pos=0)
+    spec_id = tb.Int32Col(dflt=0, pos=1)
+    cells = tb.BoolCol(shape=(ROWS, COLUMNS))
+model_results = utils.QuickTable("model_results", ModelResult,
+                                  filters=tb.Filters(complib='zlib', 
+                                                     complevel=9))
+
+def compute_from_spec_id(spec_id):
+    model = from_spec(specs.get_spec(spec_id))
+    model.run()
+    
+    model_result = model_results.table.row
+    id = model_results.table.nrows
+    model_result['id'] = id
+    model_result['spec_id'] = spec_id
+    model_result['cells'] = model.render().astype(bool)
+    model_result.append()
+    model_results.flush()
+    
+    return id
+    
+def get_results_by_spec_id(spec_id):
+    id_match = 'spec_id == {0}'.format(spec_id)
+    return [row['cells'] for row in model_results.table.where(id_match)]
 
 def from_spec(spec):
-    cls = _get_model_class(spec)
+    cls = get_model_class(spec)
     return cls(spec)
 
-def _get_model_class(spec):
+def get_model_class(spec):
     name = spec.model
     for match in [ProbabilisticAutomataModel]:
         if match.__name__ == name:
@@ -25,15 +57,14 @@ class Model(object):
     
     def __init__(self, spec):
         self.spec = spec
-        self._p = spec.quick_parameters
+        self._p = spec.make_quick_parameters()
         self._verify_parameters()
         
-        self.num_cells = self._p.rows, self._p.columns
+        self.num_cells = ROWS, COLUMNS
         self.min_dimension = min(self.num_cells)
         
     def _verify_parameters(self):
-        self._p.is_between("rows", 1, 512, value_type=int)
-        self._p.is_between("columns", 1, 512, value_type=int)
+        pass
         
     @property
     def mass(self):
@@ -70,7 +101,7 @@ class Model(object):
             elif name == "time":
                 max_time = int(value)
                 clauses.append(lambda time: time >= max_time)
-            elif name == "max height":
+            elif name == "height":
                 max_height = int(value)
                 clauses.append(lambda time: self.max_height >= max_height)
             else:
@@ -95,8 +126,8 @@ class CellularAutomataModel(Model):
         self.dividing = np.zeros(self.num_cells, bool)
         self.surface_tension = np.zeros(self.num_cells, float)
         
-        self.__max_row = self._p.rows-1
-        self.__max_column = self._p.columns-1
+        self.__max_row = ROWS-1
+        self.__max_column = COLUMNS-1
         self.__mass = 0
         self.__max_height = 0
         
@@ -107,10 +138,10 @@ class CellularAutomataModel(Model):
         
         self._p.is_between("boundary_layer", 0, 32)
         self._p.is_between("light_penetration", 0, 1024)
-        self._p.is_between("media_concentration", 0.0, 10.0, value_type=float)
+        self._p.is_between("media_concentration", 0.0, 10.0)
         self._p.is_between("media_penetration", 0, 32)
-        self._p.is_between("division_constant", 0.00001, 10.0, value_type=float)
-        self._p.is_between("initial_cell_spacing", 0, self._p.columns-1)
+        self._p.is_between("division_constant", 0.00001, 10.0)
+        self._p.is_between("initial_cell_spacing", 0, COLUMNS-1)
         
     def render(self):
         return self.cells*255
@@ -136,7 +167,7 @@ class CellularAutomataModel(Model):
             self.__max_height = row
     
     def _place_random_cells(self, probability=0.2):
-        for column in range(self._p.columns):
+        for column in range(COLUMNS):
             if rdm.random() < probability:
                 self.set_alive(0, column)
 
@@ -145,7 +176,7 @@ class CellularAutomataModel(Model):
             spacing = self._p.initial_cell_spacing
         
         start = int(spacing/2)
-        end = self._p.columns-int(spacing/2)
+        end = COLUMNS-int(spacing/2)
         for column in range(start, end+1, spacing):
             self.set_alive(0, column)
     
@@ -212,27 +243,27 @@ class ProbabilisticAutomataModel(CellularAutomataModel):
     def reset(self):
         super(ProbabilisticAutomataModel, self).reset()
         
-        self.distance_kernel = _generate_distance_kernel(self._p.block_size)
-        self.distance_kernel **= self._p.distance_power
-        self.distance_kernel /= self.distance_kernel.sum()
-        self.tension_kernel = np.array([[1, 2, 1],
-                                        [2, 0, 2],
-                                        [1, 2, 1]], float)
-        self.tension_kernel /= self.tension_kernel.sum()
-        self.tension_min = self.tension_kernel[0:2, 0].sum()
+        self._distance_kernel = _generate_distance_kernel(self._p.block_size)
+        self._distance_kernel **= self._p.distance_power
+        self._distance_kernel /= self._distance_kernel.sum()
+        self._tension_kernel = np.array([[1, 2, 1],
+                                         [2, 0, 2],
+                                         [1, 2, 1]], float)
+        self._tension_kernel /= self._tension_kernel.sum()
+        self.tension_min = self._tension_kernel[0:2, 0].sum()
         
         shape = self._p.block_size, self._p.block_size
-        self.probability = np.empty(shape, np.float32)
-        self.cumulative = np.empty(self.probability.size, np.float32)
-        self.indices = np.arange(self.probability.size)
-        self.cell_block = np.empty(shape, np.uint8)
+        self._probability = np.empty(shape, np.float32)
+        self._cumulative = np.empty(self._probability.size, np.float32)
+        self._indices = np.arange(self._probability.size)
+        self._cell_block = np.empty(shape, np.uint8)
         
 
     def _verify_parameters(self):
         super(CellularAutomataModel, self)._verify_parameters()
         
-        self._p.is_between("distance_power", 0.0, 4.0, value_type=float)
-        self._p.is_between("tension_power", 0.0, 4.0, value_type=float)
+        self._p.is_between("distance_power", 0.0, 4.0)
+        self._p.is_between("tension_power", 0.0, 4.0)
         self._p.is_between("block_size", 3, 15)
         if self._p.block_size % 2 != 1:
             raise specs.ParameterValueError("block_size", self._p.block_size,
@@ -249,26 +280,27 @@ class ProbabilisticAutomataModel(CellularAutomataModel):
         
         rows, columns = map(list, self.dividing.nonzero())
         for row, column in zip(rows, columns):
-            _write_block(self.cell_block, self.cells, row, column, block_size)
-            cv2.filter2D(self.cell_block, cv2.cv.CV_32F, self.tension_kernel,
-                         self.probability)
-            cv2.threshold(self.probability, self.tension_min, 0, 
-                          cv2.THRESH_TOZERO, self.probability)
-            self.probability[self.cell_block] = 0
-            self.probability **= self._p.tension_power
-            self.probability *= self.distance_kernel
+            _write_block(self._cell_block, self.cells, row, column, block_size)
+            cv2.filter2D(self._cell_block, cv2.cv.CV_32F, self._tension_kernel,
+                         self._probability)
+            cv2.threshold(self._probability, self.tension_min, 0, 
+                          cv2.THRESH_TOZERO, self._probability)
+            self._probability[self._cell_block] = 0
+            self._probability **= self._p.tension_power
+            self._probability *= self._distance_kernel
             
             # optimized version of np.random.choice
-            np.cumsum(self.probability.flat, out=self.cumulative)
-            total = self.cumulative[-1]
+            np.cumsum(self._probability.flat, out=self._cumulative)
+            total = self._cumulative[-1]
             if total < 1.0e-12:
                 # no viable placements, we'll have precision problems anyways
                 continue 
-            self.cumulative /= total
+            self._cumulative /= total
             
-            index = self.indices[np.searchsorted(self.cumulative, rdm.random())]
+            index = self._indices[np.searchsorted(self._cumulative, 
+                                                  rdm.random())]
             local_row, local_column = np.unravel_index(index, 
-                                                       self.probability.shape)
+                                                       self._probability.shape)
             self.set_alive(row+(local_row-half_block), 
                           column+(local_column-half_block))
     

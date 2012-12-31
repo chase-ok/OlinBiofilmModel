@@ -4,102 +4,106 @@ Created on Nov 12, 2012
 @author: Chase Kernan
 '''
 
-import yaml
-import uuid
+import tables; tb = tables
+import utils
 
-SPEC_FILE_TYPE = "spec"
-        
-def generate_id():
-    return str(uuid.uuid4())
-        
 DEFAULT_MODEL = "ProbabilisticAutomataModel"
-DEFAULT_STOP_ON = dict(mass=5000, time=20000)
-DEFAULT_PARAMETERS = dict(block_size=7,
-                          rows=48, columns=256,
-                          boundary_layer=6,
-                          media_concentration=1.0,
-                          media_penetration=4,
-                          light_penetration=8,
-                          distance_power=1.0,
-                          tension_power=1.0,
-                          initial_cell_spacing=2,
-                          division_constant=1.0)
+MODEL_ENUM = tb.Enum([DEFAULT_MODEL])
 
-class Spec(object):
+class Spec(tb.IsDescription):
+    id = tb.Int32Col(dflt=0, pos=0)
+    model = tb.EnumCol(MODEL_ENUM, DEFAULT_MODEL, base='uint8')
+    stop_on_mass = tb.UInt32Col(dflt=5000)
+    stop_on_time = tb.UInt32Col(dflt=20000)
+    stop_on_height = tb.UInt32Col(dflt=0)
     
-    def __init__(self, id=None,
-                       model=DEFAULT_MODEL,
-                       stop_on=DEFAULT_STOP_ON,
-                       parameters=DEFAULT_PARAMETERS):
-        self.id = generate_id() if id is None else id
-        self.model = model
-        self.stop_on = stop_on.copy()
-        self.parameters = parameters.copy()
-        
-    @property
-    def quick_parameters(self):
-        return QuickParameterObject(self.parameters)
-        
-    def dump(self, stream):
-        yaml_obj = dict(id=self.id,
-                        model=self.model,
-                        stop_on=self.stop_on,
-                        parameters=self.parameters)
-        yaml.safe_dump(yaml_obj, stream, default_flow_style=False)
-            
-    def __str__(self):
-        return self.id
+    block_size = tb.UInt8Col(dflt=7)
+    boundary_layer = tb.UInt8Col(dflt=4)
+    media_concentration = tb.Float32Col(dflt=1.0)
+    media_penetration = tb.UInt8Col(dflt=4)
+    light_penetration = tb.UInt16Col(dflt=8)
+    distance_power = tb.Float32Col(dflt=1.0)
+    tension_power = tb.Float32Col(dflt=1.0)
+    initial_cell_spacing = tb.UInt16Col(dflt=2)
+    division_constant = tb.Float32Col(dflt=1.0)
+specs = utils.QuickTable("specs", Spec,
+                         filters=tb.Filters(complib='blosc', complevel=1))
 
+def create_spec(flush=True, **kwargs):
+    spec = specs.table.row
+    id = specs.table.nrows
+    spec['id'] = id
+    for key, value in kwargs.iteritems():
+        spec[key] = value
+    spec.append()
+    
+    if flush:
+        specs.flush()
+    return id
+
+def get_spec(id):
+        return _SpecWrapper(specs.table[id])
 
 class ParameterValueError(Exception):
     def __init__(self, name, value, reason=None):
         super(ParameterValueError, self).__init__({'name':name, 
                                                    'value':value, 
                                                    'reason':reason})
-
-class MissingParameterError(Exception):
-    def __init__(self, name):
-        super(MissingParameterError, self).__init__(name)
     
-class QuickParameterObject(object):
+class _QuickParameterObject(object):
     
     def __init__(self, parameters):
         self.__dict__ = parameters
         
-    def is_between(self, name, min_value, max_value, value_type=int):
+    def is_between(self, name, min_value, max_value):
         value = getattr(self, name)
-        if not isinstance(value, value_type) or value < min_value \
-                                            or value > max_value:
+        if value < min_value or value > max_value:
             raise ParameterValueError(name, value, 
-                                      "Must be a {0} in the range {1} to {2}."\
-                                      .format(value_type, min_value, max_value))
-        
-    def __getattr__(self, name):
-        raise MissingParameterError(name)
+                                      "Must be in the range {1} to {2}."\
+                                      .format(min_value, max_value))
         
     def __repr__(self):
         return "{0}({1})".format(self.__class__.__name__, self.__dict__)
 
-
-class SpecFileError(Exception):
-    def __init__(self, path, cause):
-        super(SpecFileError, self).__init__({'path':path, 'cause':cause})
-
-def from_file(path):
-    try:
-        with open(path, 'id') as stream:
-            yaml_obj = yaml.load(stream)
-    except yaml.YAMLError as error:
-        raise SpecFileError(path, error)
-    except IOError as error:
-        raise SpecFileError(path, error)
+class _SpecWrapper(object):
     
-    try:
-        return Spec(id=yaml_obj['id'],
-                    model=yaml_obj['model'],
-                    stop_on=yaml_obj['stop_on'],
-                    parameters=yaml_obj['parameters'])
-    except KeyError as e:
-        raise SpecFileError(path, "Missing {0} section.".format(e.args[0]))
+    def __init__(self, row):
+        self._row = row
+    
+    @property
+    def id(self):
+        return self._row['id']
+    
+    @property
+    def model(self):
+        return MODEL_ENUM(self._row['model'])
+    
+    @property
+    def stop_on(self):
+        stop_on = {}
+        for prop in ['mass', 'time', 'height']:
+            value = self._row['stop_on_' + prop]
+            if value != 0:
+                stop_on[prop] = value
+        return stop_on
+    
+    @property
+    def parameters(self):
+        params = {}
+        for param in ['block_size', 
+                      'boundary_layer', 
+                      'media_concentration', 
+                      'media_penetration', 
+                      'light_penetration',
+                      'distance_power', 
+                      'tension_power', 
+                      'initial_cell_spacing', 
+                      'division_constant']:
+            params[param] = self._row[param]
+        return params
+    
+    def make_quick_parameters(self):
+        return _QuickParameterObject(self.parameters)
 
     
+
