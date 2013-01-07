@@ -6,8 +6,7 @@ Created on Dec 30, 2012
 
 import numpy as np
 import cv2
-import random as rdm
-import specs
+import specs; sp = specs # fucking code analysis
 import tables; tb = tables
 import utils
 import models
@@ -35,7 +34,8 @@ class BasicAnalysis(tb.IsDescription):
     
 basic_analysis = utils.QuickTable("basic_analysis", BasicAnalysis,
                                   filters=tb.Filters(complib='zlib', 
-                                                     complevel=9))
+                                                     complevel=9),
+                                  sorted_indices=['model_id', 'spec_id'])
 
 def do_basic_analysis(model_id):
     result = models.model_results.table[model_id]
@@ -56,19 +56,25 @@ def do_basic_analysis(model_id):
     row['convexity_std'] = analyzer.convexity_std
     row['x_correlations'] = analyzer.x_correlations
     row['overhangs'] = analyzer.overhangs
+    row['mass'] = analyzer.mass
     if old is None:
         row.append()
     else:
         row.update()
     basic_analysis.flush()
+    
+def do_basic_analysis_for_all_models(display_progress=True, recompute=False):
+    for model in models.model_results.iter_rows(display_progress):
+        model_id = model['id']
+        if not recompute:
+            if get_basic_analysis(model_id) is not None:
+                continue
+        do_basic_analysis(model_id)
 
 def get_basic_analysis(model_id, compute_on_missing=False):
-    id_match = 'model_id == {0}'.format(model_id)
-    rows = [row for row in basic_analysis.table.where(id_match)]
-    assert len(rows) <= 1
-    
-    if rows:
-        return rows[0]
+    basic = basic_analysis.read_single('model_id == {0}'.format(model_id))
+    if basic:
+        return basic
     elif compute_on_missing:
         do_basic_analysis(model_id)
         return basic_analysis.table[basic_analysis.table.nrows-1]
@@ -144,10 +150,15 @@ class BasicAnalyzer(object):
             for row in range(defects.shape[0]):
                 depth = defects[row, 0, 3]/256.0
                 self.convexity_defects.append(depth)
-                
-        self.convexity_max = max(self.convexity_defects)
-        self.convexity_mean = np.mean(self.convexity_defects)
-        self.convexity_std = np.std(self.convexity_defects)
+        
+        if self.convexity_defects:
+            self.convexity_max = max(self.convexity_defects)
+            self.convexity_mean = np.mean(self.convexity_defects)
+            self.convexity_std = np.std(self.convexity_defects)
+        else:
+            self.convexity_max = 0.0
+            self.convexity_mean = 0.0
+            self.convexity_std = 0.0
 
     def _calculate_x_correlations(self):
         distances = range(1, self.columns/2)
@@ -195,7 +206,7 @@ SCALAR_PREFIX = "scalars_"
 
 class ScalarField(object):
     
-    def __init__(self, name, value_col):
+    def __init__(self, name, value_col=tb.Float32Col()):
         self.name = name
         self.value_col = value_col
         self._setup_tables()
@@ -212,11 +223,14 @@ class ScalarField(object):
         self._by_model = utils.QuickTable(SCALAR_PREFIX + self.name, 
                                           ByModelDescriptor,
                                           filters=tb.Filters(complib='blosc', 
-                                                             complevel=1))
+                                                             complevel=1),
+                                          sorted_indices=['spec_id', 
+                                                          'model_id'])
         self._by_spec = utils.QuickTable(SCALAR_PREFIX + self.name + "_summary", 
                                          BySpecDescriptor,
                                          filters=tb.Filters(complib='blosc', 
-                                                            complevel=1))
+                                                            complevel=1),
+                                         sorted_indices=['spec_id'])
     
     def compute(self):
         self._compute_by_model()
@@ -252,34 +266,95 @@ class ScalarField(object):
         plt.ylabel("Frequency")
         if show:
             plt.show()
+            
+    def phase_diagram(self, parameter1, parameter2, numCells=50, 
+                      spec_query=None, show=False):
+        if spec_query:
+            spec_matches = sp.specs.table.readWhere(spec_query)
+        else:
+            spec_matches = sp.specs.table.read()
+        
+        shape = spec_matches.size, 1
+        print shape
+        xs = np.empty(shape, float)
+        ys = np.empty(shape, float)
+        values = np.empty(shape, float)
+        
+        for i, spec in enumerate(spec_matches):
+            xs[i] = float(spec[parameter1])
+            ys[i] = float(spec[parameter2])
+            values[i] = self._by_spec.read_single('spec_id == {0}'
+                                                  .format(spec['id']))['mean']
+        
+        xMin, xMax = xs.min(), xs.max()
+        yMin, yMax = ys.min(), ys.max()
+        
+        assert xMin != xMax
+        assert yMin != yMax
+        
+        grid = np.mgrid[xMin:xMax:numCells*1j, 
+                        yMin:yMax:numCells*1j]
+        interp = interpolate.griddata(np.hstack((xs, ys)), 
+                                      values, 
+                                      np.vstack((grid[0].flat, grid[1].flat)).T, 
+                                      'cubic')
+        valueGrid = np.reshape(interp, grid[0].shape)
+        
+        plt.pcolormesh(grid[0], grid[1], valueGrid)
+        plt.xlim(xMin, xMax)
+        plt.ylim(yMin, yMax)
+        plt.xlabel(parameter1)
+        plt.ylabel(parameter2)
+        plt.colorbar()
+        plt.title(self.name)
+        if show:
+            plt.show()
+    
 
 class ScalarBasicFuncField(ScalarField):
     
-    def __init__(self, name, value_col, func):
-        super(ScalarBasicFuncField, self).__init__(name, value_col)
+    def __init__(self, name, func):
+        super(ScalarBasicFuncField, self).__init__(name)
         self.func = func
     
     def _compute_by_model(self):
         self._by_model.reset_table()
         
         row = self._by_model.table.row
-        for model_result in models.model_results.table:
-            model_id = model_result['id']
+        for model in models.model_results.iter_rows(display_progress=True):
+            model_id = model['id']
             row['model_id'] = model_id
-            row['spec_id'] = model_result['spec_id']
+            row['spec_id'] = model['spec_id']
             
             basic = get_basic_analysis(model_id, compute_on_missing=True)
             row['value'] = self.func(basic)
-            print model_id, row['value']
             row.append()
         self._by_model.flush()                
 
-convexity_mean_field = ScalarBasicFuncField('convexity_mean', tb.Float32Col(), 
+convexity_mean_field = ScalarBasicFuncField('convexity_mean', 
                                             lambda row: row['convexity_mean'])
 
-    
-    
-    
-    
+def _compute_overhang(basic):
+    return basic['overhangs'].sum()/float(basic['overhangs'].size)
+overhang_field = ScalarBasicFuncField('overhang', _compute_overhang)
+
+def _compute_ptm(basic):
+    return basic['perimeter']/float(basic['mass'])
+perimeter_to_mass_field = ScalarBasicFuncField('perimeter_to_mass',
+                                               _compute_ptm)
+
+mean_height_field = ScalarBasicFuncField('mean_height', 
+                                         lambda row: row['mean_height'])
+
+max_height_field = ScalarBasicFuncField('max_height', 
+                                        lambda row: row['max_height'])
+
+def _compute_mtmh(basic):
+    if basic['mean_height'] > 0.01 :
+        return basic['max_height']/basic['mean_height']
+    else:
+        return 0.0
+max_to_mean_height_field = ScalarBasicFuncField('max_to_mean_height',
+                                                _compute_mtmh)
     
     

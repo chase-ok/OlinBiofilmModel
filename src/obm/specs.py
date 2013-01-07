@@ -6,6 +6,8 @@ Created on Nov 12, 2012
 
 import tables; tb = tables
 import utils
+import numpy as np
+from itertools import product
 
 DEFAULT_MODEL = "ProbabilisticAutomataModel"
 MODEL_ENUM = tb.Enum([DEFAULT_MODEL])
@@ -16,7 +18,6 @@ class Spec(tb.IsDescription):
     stop_on_mass = tb.UInt32Col(dflt=5000)
     stop_on_time = tb.UInt32Col(dflt=20000)
     stop_on_height = tb.UInt32Col(dflt=0)
-    
     block_size = tb.UInt8Col(dflt=7)
     boundary_layer = tb.UInt8Col(dflt=4)
     media_concentration = tb.Float32Col(dflt=1.0)
@@ -27,9 +28,10 @@ class Spec(tb.IsDescription):
     initial_cell_spacing = tb.UInt16Col(dflt=2)
     division_constant = tb.Float32Col(dflt=1.0)
 specs = utils.QuickTable("specs", Spec,
-                         filters=tb.Filters(complib='blosc', complevel=1))
+                         filters=tb.Filters(complib='blosc', complevel=1),
+                         sorted_indices=['id'])
 
-def create_spec(flush=True, **kwargs):
+def create_spec(**kwargs):
     spec = specs.table.row
     id = specs.table.nrows
     spec['id'] = id
@@ -37,12 +39,37 @@ def create_spec(flush=True, **kwargs):
         spec[key] = value
     spec.append()
     
-    if flush:
-        specs.flush()
+    specs.flush() # have to flush to update nrows
     return id
 
-def get_spec(id):
-        return _SpecWrapper(specs.table[id])
+def get_spec(id, wrapped=True):
+    spec = specs.read_single('id == {0}'.format(id))
+    return _SpecWrapper(spec) if wrapped else spec
+    
+class SpecBuilder(object):
+    
+    def __init__(self):
+        self._all_values = {}
+    
+    def add(self, column, *values):
+        self._all_values.setdefault(column, []).extend(values)
+        
+    @property
+    def num_specs(self):
+        return np.product([len(v) for v in self._all_values.itervalues()])
+
+    @property
+    def value_sets(self):
+        return map(dict, product(*([(name, value) for value in values]
+                                   for name, values 
+                                   in self._all_values.iteritems())))
+    
+    def build(self):
+        for value_set in self.value_sets:
+            create_spec(**value_set)
+        specs.flush()
+        self._all_values = {}
+
 
 class ParameterValueError(Exception):
     def __init__(self, name, value, reason=None):

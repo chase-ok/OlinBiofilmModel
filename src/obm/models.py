@@ -20,8 +20,9 @@ class ModelResult(tb.IsDescription):
     spec_id = tb.Int32Col(dflt=0, pos=1)
     cells = tb.BoolCol(shape=(ROWS, COLUMNS))
 model_results = utils.QuickTable("model_results", ModelResult,
-                                  filters=tb.Filters(complib='zlib', 
-                                                     complevel=9))
+                                 filters=tb.Filters(complib='zlib', 
+                                                    complevel=9),
+                                 sorted_indices=['id', 'spec_id'])
 
 def compute_from_spec_id(spec_id):
     model = from_spec(specs.get_spec(spec_id))
@@ -36,6 +37,12 @@ def compute_from_spec_id(spec_id):
     model_results.flush()
     
     return id
+
+def compute_from_all_specs(num_reps=5, display_progress=True):
+    for spec in specs.specs.iter_rows(display_progress=display_progress):
+        for _ in range(num_reps):
+            compute_from_spec_id(spec['id'])
+        
     
 def get_results_by_spec_id(spec_id):
     id_match = 'spec_id == {0}'.format(spec_id)

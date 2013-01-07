@@ -69,9 +69,12 @@ class H5Context(object):
         
 class QuickTable(object):
     
-    def __init__(self, node, description, **kwargs):
+    def __init__(self, node, description, indices=None, sorted_indices=None,
+                 **kwargs):
         self.node = node
         self.description = description
+        self.indices = [] if indices is None else indices
+        self.sorted_indices = [] if sorted_indices is None else sorted_indices
         self.kwargs = kwargs
         self._table = None
     
@@ -88,7 +91,27 @@ class QuickTable(object):
     def reset_table(self):
         self._table = get_h5().createTable(self.node, self.description, 
                                            **self.kwargs)
+        for index in self.indices:
+            getattr(self._table.cols, index).createIndex()
+        for index in self.sorted_indices:
+            getattr(self._table.cols, index).createCSIndex()
     
     def flush(self):
         self.table.flush()
+        
+    def iter_rows(self, display_progress=False):
+        total = self.table.nrows
+        count = 0
+        for spec in self.table:
+            yield spec
+            count += 1
+            if display_progress:
+                print "Finished {0} of {1}".format(count, total)
+        if display_progress:
+            print "Done!"
+    
+    def read_single(self, query):
+        rows = self.table.readWhere(query)
+        assert rows.size <= 1
+        return rows[0] if rows.size == 1 else None
     
