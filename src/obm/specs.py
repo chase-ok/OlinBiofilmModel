@@ -132,5 +132,33 @@ class _SpecWrapper(object):
     def make_quick_parameters(self):
         return _QuickParameterObject(self.parameters)
 
+def make_query(use_defaults=False, **conditions):
+    specified = set()
+    clauses = []
+    for column, column_clauses in conditions.iteritems():
+        specified.add(column)
+        if isinstance(column_clauses, basestring):
+            column_clauses = (column_clauses,)
+        clauses.extend((column + clause) for clause in column_clauses)
     
+    if use_defaults:
+        for column, data_type in Spec.columns.iteritems():
+            if column != 'id' and column not in specified:
+                clauses.append("{0}=={1}".format(column, data_type.dflt))
+    
+    return "&".join("({0})".format(clause) for clause in clauses)
+        
+boundary_vs_media_query = make_query(id='<100')
+
+distance_vs_tension_query = make_query(id=('>=100', '<200'))
+distance_vs_tension_gt0_query = make_query(id=('>=100', '<200'),
+                                           distance_power='>0',
+                                           tension_power='>0')
+
+light_vs_division_query = make_query(id=('>=200', '<920'))
+
+light_overhang_query = make_query(id=('>=200', '<920'),
+                                  distance_power='==1.0',
+                                  tension_power='==1.0',
+                                  division_constant='==1.0')
 

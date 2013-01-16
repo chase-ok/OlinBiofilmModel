@@ -5,6 +5,15 @@ Created on Dec 30, 2012
 '''
 
 import tables as tb
+import numpy as np
+
+def derivative(x, y):
+    return np.gradient(x)/np.gradient(y)
+
+def smooth(data, window):
+    signal = np.r_[data[window-1:0:-1], data, data[-1:-window:-1]]
+    kernel = np.ones(window, dtype=float)/window
+    return np.convolve(signal, kernel, mode='valid')[:len(data)]
 
 DEFAULT_H5_FILE = "data.h5"
 

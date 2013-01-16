@@ -198,12 +198,12 @@ class CellularAutomataModel(Model):
                          dst=self.media)
 
     def _calculate_light(self):
-        if self._p.light_penetration != 0:
+        if self._p.light_penetration != 0.0:
             np.cumsum(self.cells, axis=0, out=self.light)
-            self.light /= -self._p.light_penetration
+            self.light /= -float(self._p.light_penetration) # otherwise uint16
             np.exp(self.light, out=self.light)
         else:
-            self.light = np.ones(self.num_cells, dtype=float)
+            self.light.fill(1.0)
 
     def _calculate_surface_tension(self, center_factor=0):
         k = center_factor

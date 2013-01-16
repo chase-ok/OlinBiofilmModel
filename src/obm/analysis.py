@@ -267,7 +267,7 @@ class ScalarField(object):
         if show:
             plt.show()
             
-    def phase_diagram(self, parameter1, parameter2, numCells=50, 
+    def phase_diagram_2d(self, parameter1, parameter2, numCells=50, 
                       spec_query=None, show=False):
         if spec_query:
             spec_matches = sp.specs.table.readWhere(spec_query)
@@ -275,7 +275,6 @@ class ScalarField(object):
             spec_matches = sp.specs.table.read()
         
         shape = spec_matches.size, 1
-        print shape
         xs = np.empty(shape, float)
         ys = np.empty(shape, float)
         values = np.empty(shape, float)
@@ -306,6 +305,28 @@ class ScalarField(object):
         plt.xlabel(parameter1)
         plt.ylabel(parameter2)
         plt.colorbar()
+        plt.title(self.name)
+        if show:
+            plt.show()
+            
+    def phase_diagram_1d(self, parameter, spec_query=None, show=False, 
+                         **line_args):
+        if spec_query:
+            spec_matches = sp.specs.table.readWhere(spec_query)
+        else:
+            spec_matches = sp.specs.table.read()
+        
+        xs = np.empty(spec_matches.size, float)
+        ys = np.empty_like(xs)
+        
+        for i, spec in enumerate(spec_matches):
+            xs[i] = float(spec[parameter])
+            ys[i] = self._by_spec.read_single('spec_id == {0}'
+                                              .format(spec['id']))['mean']
+        
+        plt.plot(xs, ys, **line_args)
+        plt.xlabel(parameter)
+        plt.ylabel(self.name)
         plt.title(self.name)
         if show:
             plt.show()
@@ -356,5 +377,13 @@ def _compute_mtmh(basic):
         return 0.0
 max_to_mean_height_field = ScalarBasicFuncField('max_to_mean_height',
                                                 _compute_mtmh)
-    
-    
+
+def _compute_negative_curvature(basic, smoothings=[15, 7, 3]):
+    coverage = utils.smooth(basic['coverages'][0], smoothings[0])
+    height = np.arange(1, len(coverage)+1)
+    slope = utils.smooth(utils.derivative(coverage, height), smoothings[1])
+    curvature = utils.smooth(utils.derivative(slope, height), smoothings[2])
+    return -np.sum((curvature < 0)*curvature)
+negative_coverage_curvature_field = ScalarBasicFuncField(
+                                            'negative_coverage_curvature',
+                                            _compute_negative_curvature)
