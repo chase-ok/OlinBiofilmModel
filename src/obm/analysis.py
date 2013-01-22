@@ -30,7 +30,8 @@ class BasicAnalysis(tb.IsDescription):
     convexity_mean = tb.Float32Col()
     convexity_std = tb.Float32Col()
     x_correlations = tb.Float32Col(shape=(models.ROWS, models.COLUMNS/2-1))
-    overhangs = tb.UInt16Col(shape=(1, models.COLUMNS))
+    overhangs = tb.UInt8Col(shape=models.COLUMNS)
+    overhang_heights = tb.UInt16Col(shape=models.COLUMNS)
     
 basic_analysis = utils.QuickTable("basic_analysis", BasicAnalysis,
                                   filters=tb.Filters(complib='zlib', 
@@ -56,6 +57,7 @@ def do_basic_analysis(model_id):
     row['convexity_std'] = analyzer.convexity_std
     row['x_correlations'] = analyzer.x_correlations
     row['overhangs'] = analyzer.overhangs
+    row['overhang_heights'] = analyzer.overhang_heights
     row['mass'] = analyzer.mass
     if old is None:
         row.append()
@@ -190,12 +192,14 @@ class BasicAnalyzer(object):
             self.x_correlations[row, :] = probabilities
             
     def _calculate_overhang(self):
+        self.overhang_heights = np.zeros(self.columns, dtype=int)
         self.overhangs = np.zeros(self.columns, dtype=int)
         empty_count = np.zeros_like(self.overhangs)
         
         for row in range(self.heights.max()):
             alive = self.cells[row] > 0
-            self.overhangs += empty_count*alive
+            self.overhang_heights += empty_count*alive
+            self.overhangs += alive
             empty_count += 1
             empty_count[alive] = 0
     
@@ -358,6 +362,11 @@ convexity_mean_field = ScalarBasicFuncField('convexity_mean',
 def _compute_overhang(basic):
     return basic['overhangs'].sum()/float(basic['overhangs'].size)
 overhang_field = ScalarBasicFuncField('overhang', _compute_overhang)
+
+def _compute_overhang_height(basic):
+    return basic['overhang_heights'].sum()/float(basic['overhang_heights'].size)
+overhang_heights_field = ScalarBasicFuncField('overhang_heights', 
+                                              _compute_overhang_height)
 
 def _compute_ptm(basic):
     return basic['perimeter']/float(basic['mass'])
