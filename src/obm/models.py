@@ -191,7 +191,11 @@ class CellularAutomataModel(Model):
         kernel = _make_circular_kernel(self._p.boundary_layer)
         cv2.filter2D(self.cells, -1, kernel, self.boundary_layer)
 
-        np.logical_not(self.boundary_layer, out=self.media)
+        np.logical_not(self.boundary_layer, out=self.boundary_layer)
+        #remove any non-connected segments
+        cv2.floodFill(self.boundary_layer, None, 
+                      (self.num_cells[0]-1, self.num_cells[1]/2), 2)
+        self.media = (self.boundary_layer == 2).astype(float)
         self.media *= self._p.media_concentration
 
         cv2.GaussianBlur(self.media, (0, 0), self._p.media_penetration,
@@ -227,7 +231,7 @@ class CellularAutomataModel(Model):
         self._calculate_light()
         self._calculate_division_probability()
         
-    def make_presentation_image(self):
+    def make_presentation_image(self, prob_thresh=0.5):
         image = np.zeros(self.num_cells + (3,), np.uint8)
         
         media = (self.media*127).astype(np.uint8)
@@ -240,7 +244,7 @@ class CellularAutomataModel(Model):
         image[:, :, 1][np.logical_not(self.cells)] = 0
         image[:, :, 0][self.cells] = minValue
         
-        very_likely = np.logical_and(self.cells, normalized > 0.5)
+        very_likely = np.logical_and(self.cells, normalized > prob_thresh)
         image[:, :, 2][very_likely] = 127 + 127*normalized[very_likely]
         
         return image   
@@ -257,7 +261,7 @@ class ProbabilisticAutomataModel(CellularAutomataModel):
                                          [2, 0, 2],
                                          [1, 2, 1]], float)
         self._tension_kernel /= self._tension_kernel.sum()
-        self.tension_min = self._tension_kernel[0:2, 0].sum()
+        self.tension_min = self._tension_kernel[0:1, 0].sum()
         
         shape = self._p.block_size, self._p.block_size
         self._probability = np.empty(shape, np.float32)
@@ -289,7 +293,7 @@ class ProbabilisticAutomataModel(CellularAutomataModel):
         for row, column in zip(rows, columns):
             _write_block(self._cell_block, self.cells, row, column, block_size)
             cv2.filter2D(self._cell_block, cv2.cv.CV_32F, self._tension_kernel,
-                         self._probability)
+                         self._probability, borderType=cv2.BORDER_CONSTANT)
             cv2.threshold(self._probability, self.tension_min, 0, 
                           cv2.THRESH_TOZERO, self._probability)
             self._probability[self._cell_block] = 0

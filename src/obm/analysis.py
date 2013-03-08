@@ -271,7 +271,7 @@ class ScalarField(object):
         if show:
             plt.show()
             
-    def phase_diagram_2d(self, parameter1, parameter2, numCells=50, 
+    def phase_diagram_2d(self, parameter1, parameter2, num_cells=50, 
                       spec_query=None, show=False):
         if spec_query:
             spec_matches = sp.specs.table.readWhere(spec_query)
@@ -295,8 +295,8 @@ class ScalarField(object):
         assert xMin != xMax
         assert yMin != yMax
         
-        grid = np.mgrid[xMin:xMax:numCells*1j, 
-                        yMin:yMax:numCells*1j]
+        grid = np.mgrid[xMin:xMax:num_cells*1j, 
+                        yMin:yMax:num_cells*1j]
         interp = interpolate.griddata(np.hstack((xs, ys)), 
                                       values, 
                                       np.vstack((grid[0].flat, grid[1].flat)).T, 
