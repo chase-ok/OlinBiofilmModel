@@ -12,7 +12,7 @@ import tables; tb = tables
 import utils
 
 ROWS = 64
-COLUMNS = 256
+COLUMNS = 128
 MODELS_NODE = "models"
 
 class ModelResult(tb.IsDescription):
@@ -47,6 +47,13 @@ def compute_from_all_specs(num_reps=5, display_progress=True):
 def get_results_by_spec_id(spec_id):
     id_match = 'spec_id == {0}'.format(spec_id)
     return [row['cells'] for row in model_results.table.where(id_match)]
+
+def dump_all_results(prefix):
+    for i in range(model_results.table.nrows):
+        model = model_results.table[i]
+        cells = model['cells'].astype(np.uint8)*255
+        name = 'result-{0}-{1}.png'.format(model['spec_id'], model['id'])
+        cv2.imwrite(prefix + name, cells)
 
 def from_spec(spec):
     cls = get_model_class(spec)
@@ -146,9 +153,13 @@ class CellularAutomataModel(Model):
         self._p.is_between("boundary_layer", 0, 32)
         self._p.is_between("light_penetration", 0, 1024)
         self._p.is_between("media_concentration", 0.0, 10.0)
-        self._p.is_between("media_penetration", 0, 32)
         self._p.is_between("division_constant", 0.00001, 10.0)
         self._p.is_between("initial_cell_spacing", 0, COLUMNS-1)
+        self._p.is_between("diffusion_constant", 0.01, 1000.0)
+        self._p.is_between("dt", 0.01, 5.0)
+        self._p.is_between("uptake_rate", 0.001, 5.0)
+        self._p.is_between("num_diffusion_iterations", 1, 10**6)
+        self._p.is_between("monod_constant", 0.0001, 2.0)
         
     def render(self):
         return self.cells*255
@@ -186,20 +197,32 @@ class CellularAutomataModel(Model):
         end = COLUMNS-int(spacing/2)
         for column in range(start, end+1, spacing):
             self.set_alive(0, column)
+
+    def _make_boundary_layer(self):
+        kernel = _make_circular_kernel(self._p.boundary_layer)
+        boundary_layer = cv2.filter2D(self.cells, -1, kernel)
+        np.logical_not(boundary_layer, out=boundary_layer)
+
+        #remove any non-connected segments
+        fill_value = 2
+        fill_source = boundary_layer.shape[0]-1, 0
+        cv2.floodFill(boundary_layer, None, fill_source, fill_value)
+
+        in_boundary = boundary_layer == fill_value
+        values = in_boundary[in_boundary]*self._p.media_concentration
+        return in_boundary, values
     
     def _calculate_media(self):
-        kernel = _make_circular_kernel(self._p.boundary_layer)
-        cv2.filter2D(self.cells, -1, kernel, self.boundary_layer)
+        in_boundary, boundary_values = self._make_boundary_layer()
+        in_cells = self.cells > 0
 
-        np.logical_not(self.boundary_layer, out=self.boundary_layer)
-        #remove any non-connected segments
-        cv2.floodFill(self.boundary_layer, None, 
-                      (self.num_cells[0]-1, self.num_cells[1]/2), 2)
-        self.media = (self.boundary_layer == 2).astype(float)
-        self.media *= self._p.media_concentration
+        self.media.fill(0.0)
+        self.media[in_boundary] = boundary_values
+        sigma = np.sqrt(2*self._p.diffusion_constant*self._p.dt)
 
-        cv2.GaussianBlur(self.media, (0, 0), self._p.media_penetration,
-                         dst=self.media)
+        for _ in range(self._p.num_diffusion_iterations):
+            cv2.GaussianBlur(self.media, (0, 0), sigma, dst=self.media)
+            self.media[in_cells] *= 1 - self._p.uptake_rate*self._p.dt
 
     def _calculate_light(self):
         if self._p.light_penetration != 0.0:
@@ -218,8 +241,9 @@ class CellularAutomataModel(Model):
         self.surface_tension = local_sum/np.float(tension_kernel.sum())
 
     def _calculate_division_probability(self):
+        media_probability = self.media/(self.media + self._p.monod_constant)
         self.division_probability = self._p.division_constant*\
-                                   self.media*self.light
+                                    media_probability*self.light
         self.division_probability[np.logical_not(self.cells)] = 0
 
     def _calculate_dividing_cells(self):
@@ -275,7 +299,7 @@ class ProbabilisticAutomataModel(CellularAutomataModel):
         
         self._p.is_between("distance_power", 0.0, 4.0)
         self._p.is_between("tension_power", 0.0, 4.0)
-        self._p.is_between("block_size", 3, 15)
+        self._p.is_between("block_size", 3, 25)
         if self._p.block_size % 2 != 1:
             raise specs.ParameterValueError("block_size", self._p.block_size,
                                             "Must be an odd integer.")

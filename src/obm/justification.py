@@ -43,6 +43,23 @@ def justify_diffusion():
     plt.ylabel('Error')
     plt.savefig('fig/diffusion_convergence.png')
 
+def test_diffusion(boundary_layer=5, diffusion_const=1.0, depletion=0.1):
+    cells = generate_static_biofilm()
+
+    gaussian = lambda x: calc_diffusion_by_gaussian(cells, boundary_layer, max(x, 0.5))
+    #herman = lambda x: calc_diffusion_by_hermanowicz(cells, boundary_layer, x)
+    def iteration(x, dt=0.1, iters=5000):
+        return calc_diffusion_by_iteration(cells, boundary_layer, x, diffusion_const, 
+                                           dt=dt, iters=iters)
+
+    exact = iteration(depletion, dt=0.1, iters=5000)
+    ignore = make_boundary_layer(cells, boundary_layer) > 0
+    penetration, _ = fit_to_values(gaussian, exact, ignore=ignore)
+    #herman_const, _ = fit_to_values(herman, exact, guess=0.01, ignore=ignore)
+    make_diffusion_plot(exact, 'By Iteration', 'test-%s-%s-iteration' % (depletion, diffusion_const))
+    make_diffusion_plot(gaussian(penetration), 'By Gaussian', 'test-%s-%s-gaussian' % (depletion, diffusion_const))
+    #make_diffusion_plot(herman(herman_const), 'By Hermanowicz', 'test-%s-%s-herman' % (boundary_layer, diffusion_const))
+
 def make_diffusion_plot(values, subtitle, file_name=None):
     plt.clf()
     plt.pcolor(values, cmap=plt.hot())

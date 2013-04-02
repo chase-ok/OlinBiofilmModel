@@ -15,18 +15,23 @@ MODEL_ENUM = tb.Enum([DEFAULT_MODEL])
 class Spec(tb.IsDescription):
     id = tb.Int32Col(dflt=0, pos=0)
     model = tb.EnumCol(MODEL_ENUM, DEFAULT_MODEL, base='uint8')
-    stop_on_mass = tb.UInt32Col(dflt=5000)
-    stop_on_time = tb.UInt32Col(dflt=20000)
+    stop_on_mass = tb.UInt32Col(dflt=2000)
+    stop_on_time = tb.UInt32Col(dflt=5000)
     stop_on_height = tb.UInt32Col(dflt=0)
-    block_size = tb.UInt8Col(dflt=7)
-    boundary_layer = tb.UInt8Col(dflt=4)
+    block_size = tb.UInt8Col(dflt=15)
+    boundary_layer = tb.UInt8Col(dflt=5)
     media_concentration = tb.Float32Col(dflt=1.0)
-    media_penetration = tb.UInt8Col(dflt=4)
     light_penetration = tb.UInt16Col(dflt=8)
-    distance_power = tb.Float32Col(dflt=1.0)
+    distance_power = tb.Float32Col(dflt=2.0)
     tension_power = tb.Float32Col(dflt=1.0)
     initial_cell_spacing = tb.UInt16Col(dflt=2)
     division_constant = tb.Float32Col(dflt=1.0)
+    diffusion_constant = tb.Float32Col(dflt=1.0)
+    dt = tb.Float32Col(dflt=1.0)
+    uptake_rate = tb.Float32Col(dflt=0.1)
+    num_diffusion_iterations = tb.UInt32Col(dflt=10)
+    monod_constant = tb.Float32Col(dflt=0.25)
+
 specs = utils.QuickTable("specs", Spec,
                          filters=tb.Filters(complib='blosc', complevel=1),
                          sorted_indices=['id'])
@@ -120,12 +125,16 @@ class _SpecWrapper(object):
         for param in ['block_size', 
                       'boundary_layer', 
                       'media_concentration', 
-                      'media_penetration', 
                       'light_penetration',
                       'distance_power', 
                       'tension_power', 
                       'initial_cell_spacing', 
-                      'division_constant']:
+                      'division_constant',
+                      'diffusion_constant',
+                      'dt',
+                      'uptake_rate',
+                      'num_diffusion_iterations',
+                      'monod_constant']:
             params[param] = self._row[param]
         return params
     
