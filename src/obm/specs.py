@@ -16,10 +16,11 @@ class Spec(tb.IsDescription):
     id = tb.Int32Col(dflt=0, pos=0)
     model = tb.EnumCol(MODEL_ENUM, DEFAULT_MODEL, base='uint8')
     stop_on_mass = tb.UInt32Col(dflt=2000)
-    stop_on_time = tb.UInt32Col(dflt=5000)
+    stop_on_time = tb.UInt32Col(dflt=10000)
     stop_on_height = tb.UInt32Col(dflt=0)
+    stop_on_no_growth = tb.UInt32Col(dflt=200)
     block_size = tb.UInt8Col(dflt=15)
-    boundary_layer = tb.UInt8Col(dflt=5)
+    boundary_layer = tb.UInt8Col(dflt=8)
     media_concentration = tb.Float32Col(dflt=1.0)
     light_penetration = tb.UInt16Col(dflt=8)
     distance_power = tb.Float32Col(dflt=2.0)
@@ -29,8 +30,8 @@ class Spec(tb.IsDescription):
     diffusion_constant = tb.Float32Col(dflt=1.0)
     dt = tb.Float32Col(dflt=1.0)
     uptake_rate = tb.Float32Col(dflt=0.1)
-    num_diffusion_iterations = tb.UInt32Col(dflt=10)
-    monod_constant = tb.Float32Col(dflt=0.25)
+    num_diffusion_iterations = tb.UInt32Col(dflt=20)
+    monod_constant = tb.Float32Col(dflt=0.75)
 
 specs = utils.QuickTable("specs", Spec,
                          filters=tb.Filters(complib='blosc', complevel=1),
@@ -113,7 +114,7 @@ class _SpecWrapper(object):
     @property
     def stop_on(self):
         stop_on = {}
-        for prop in ['mass', 'time', 'height']:
+        for prop in ['mass', 'time', 'height', 'no_growth']:
             value = self._row['stop_on_' + prop]
             if value != 0:
                 stop_on[prop] = value

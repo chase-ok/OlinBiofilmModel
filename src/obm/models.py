@@ -76,6 +76,8 @@ class Model(object):
         
         self.num_cells = ROWS, COLUMNS
         self.min_dimension = min(self.num_cells)
+        self.last_growth = 0
+        self.time = 0
         
     def _verify_parameters(self):
         pass
@@ -101,28 +103,31 @@ class Model(object):
         self.reset()
         
         should_stop = self._get_stopping_function()
-        t = 0
-        while not should_stop(t):
+        self.time = 0
+        while not should_stop():
             self.step()
-            t += 1
+            self.time += 1
             
     def _get_stopping_function(self):
         clauses = []
         for name, value in self.spec.stop_on.iteritems():
             if name == "mass":
                 max_mass = int(value)
-                clauses.append(lambda time: self.mass >= max_mass)
+                clauses.append(lambda: self.mass >= max_mass)
             elif name == "time":
                 max_time = int(value)
-                clauses.append(lambda time: time >= max_time)
+                clauses.append(lambda: self.time >= max_time)
             elif name == "height":
                 max_height = int(value)
-                clauses.append(lambda time: self.max_height >= max_height)
+                clauses.append(lambda: self.max_height >= max_height)
+            elif name == 'no_growth':
+                no_growth = int(value)
+                clauses.append(lambda: self.time >= self.last_growth+no_growth)
             else:
                 raise specs.ParameterValueError("stop_on", self.spec.stop_on,
                         "No such stopping function {0}.".format(name))
         
-        return lambda time: any(clause(time) for clause in clauses)
+        return lambda: any(clause() for clause in clauses)
     
 ALIVE = 1
 DEAD = 0
@@ -183,6 +188,8 @@ class CellularAutomataModel(Model):
         self.__mass += 1
         if row > self.__max_height:
             self.__max_height = row
+
+        self.last_growth = self.time
     
     def _place_random_cells(self, probability=0.2):
         for column in range(COLUMNS):
@@ -337,7 +344,7 @@ class ProbabilisticAutomataModel(CellularAutomataModel):
             local_row, local_column = np.unravel_index(index, 
                                                        self._probability.shape)
             self.set_alive(row+(local_row-half_block), 
-                          column+(local_column-half_block))
+                           column+(local_column-half_block))
     
 def _make_circular_kernel(radius):
     return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius, radius))
