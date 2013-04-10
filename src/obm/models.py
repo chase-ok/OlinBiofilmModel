@@ -12,7 +12,7 @@ import tables; tb = tables
 import utils
 
 ROWS = 64
-COLUMNS = 128
+COLUMNS = 256
 MODELS_NODE = "models"
 
 class ModelResult(tb.IsDescription):
@@ -215,7 +215,7 @@ class CellularAutomataModel(Model):
         fill_source = boundary_layer.shape[0]-1, 0
         cv2.floodFill(boundary_layer, None, fill_source, fill_value)
 
-        in_boundary = boundary_layer == fill_value
+        in_boundary = boundary_layer != fill_value
         values = in_boundary[in_boundary]*self._p.media_concentration
         return in_boundary, values
     
