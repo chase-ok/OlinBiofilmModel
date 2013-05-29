@@ -12,6 +12,7 @@ import tables; tb = tables
 import utils
 import re
 import utils
+from scipy.ndimage.filters import laplace
 
 class Result(utils.TableObject):
 
@@ -84,7 +85,6 @@ def _get_mass_table(length):
 def compute_probabilistic(spec):
     model = ProbabilisticAutomataModel(spec)
     result = model.run()
-    result.save()
     return result
 
 class Model(object):
@@ -128,7 +128,6 @@ class Model(object):
             mass[self.time] = self.mass
             self.step()
             self.time += 1
-            
 
         return Result(spec_uuid=self.spec.uuid, 
                       image=self.render(), 
@@ -170,7 +169,6 @@ class CellularAutomataModel(Model):
         
         self.cells = np.zeros(self.num_cells, np.uint8)
         self.boundary_layer = np.zeros(self.num_cells, np.uint8)
-        self.media = np.zeros(self.num_cells, float)
         self.light = np.zeros(self.num_cells, float)
         self.division_probability = np.zeros(self.num_cells, float)
         self.dividing = np.zeros(self.num_cells, bool)
@@ -236,9 +234,9 @@ class CellularAutomataModel(Model):
         for column in range(start, end+1, spacing):
             self.set_alive(0, column)
 
-    def _make_boundary_layer(self):
+    def _make_boundary_layer(self, cells):
         kernel = _make_circular_kernel(self.spec.boundary_layer)
-        boundary_layer = cv2.filter2D(self.cells, -1, kernel)
+        boundary_layer = cv2.filter2D(cells.astype(np.uint8), -1, kernel)
         np.logical_not(boundary_layer, out=boundary_layer)
 
         #remove any non-connected segments
@@ -246,21 +244,37 @@ class CellularAutomataModel(Model):
         fill_source = boundary_layer.shape[0]-1, 0 # (x, y) not (r, c)
         cv2.floodFill(boundary_layer, None, fill_source, fill_value)
 
-        in_boundary = boundary_layer != fill_value
-        values = in_boundary[in_boundary]*self.spec.media_concentration
-        return in_boundary, values
+        return boundary_layer != fill_value
     
-    def _calculate_media(self):
-        in_boundary, boundary_values = self._make_boundary_layer()
-        in_cells = self.cells > 0
+    def _calculate_media(self, check_start=40, check_interval_growth=5):
+        check_interval = check_interval_growth
+        dt = 1.0/(4*self.spec.diffusion_constant)
 
-        self.media.fill(0.0)
-        self.media[in_boundary] = boundary_values
-        sigma = np.sqrt(2*self.spec.diffusion_constant*self.spec.dt)
+        cells = self._narrow_cells()
+        boundary = self._make_boundary_layer(cells)
 
-        for _ in range(self.spec.num_diffusion_iterations):
-            cv2.GaussianBlur(self.media, (0, 0), sigma, dst=self.media)
-            self.media[in_cells] *= 1 - self.spec.uptake_rate*self.spec.dt
+        media = cells*self.spec.media_concentration
+        media_next = np.empty_like(media)
+
+        for step in range(self.spec.max_diffusion_iterations):
+            laplace(media, output=media_next)
+            media_next *= self.spec.diffusion_constant*dt
+            media_next += media
+            media_next[cells] *= 1 - self.spec.uptake_rate*dt
+            media_next[boundary] = self.spec.media_concentration
+            media, media_next = media_next, media
+
+            if step >= check_start and step%check_interval == 0:
+                media_next -= media
+                np.abs(media_next, out=media_next)
+                error = media_next.sum()/(dt*media_next.size)
+                if error <= self.spec.diffusion_tol: break
+                check_interval += check_interval_growth
+
+        self.media = media
+
+    def _narrow_cells(self):
+        return self.cells[0:self.max_height+self.spec.boundary_layer+1, :] > 0
 
     def _calculate_light(self):
         if self.spec.light_penetration != 0.0:
@@ -279,9 +293,10 @@ class CellularAutomataModel(Model):
         self.surface_tension = local_sum/np.float(tension_kernel.sum())
 
     def _calculate_division_probability(self):
-        media_probability = self.media/(self.media + self.spec.monod_constant)
-        self.division_probability = self.spec.division_constant*\
-                                    media_probability*self.light
+        media_prob = self.media/(self.media + self.spec.monod_constant)
+        self.division_probability = self.spec.division_constant*self.light
+        # since we narrowed the number of rows in the diffusion calc
+        self.division_probability[0:media_prob.shape[0], :] *= media_prob
         self.division_probability[np.logical_not(self.cells)] = 0
 
     def _calculate_dividing_cells(self):
@@ -289,6 +304,7 @@ class CellularAutomataModel(Model):
                         self.division_probability
 
     def _calculate_all_through_division_probability(self):
+        if self.time - self.last_growth > 1: return
         self._calculate_media()
         self._calculate_light()
         self._calculate_division_probability()

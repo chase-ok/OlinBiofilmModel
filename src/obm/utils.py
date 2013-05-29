@@ -177,15 +177,12 @@ class TableObject(object):
         self._exclude = set(['_exclude'])
 
     def save(self, flush=True):
-        print "!!"
         row = self._lookup_by_uuid(self.uuid)
         to_fill = self.table.row if row is None else row 
-        print row
         self._fill_row(to_fill)
         if row is None:
             to_fill.append()
         else:
-            print 'update!', to_fill
             to_fill.update()
         if flush: self.table.flush()
 
@@ -205,7 +202,6 @@ class TableObject(object):
         pass
 
     def _fill_row(self, row):
-        print self.__dict__
         for name, value in self.__dict__.iteritems():
             if name not in self._exclude: row[name] = value
 

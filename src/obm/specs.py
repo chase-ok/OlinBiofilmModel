@@ -25,10 +25,10 @@ DEFAULT_PARAMETERS = {
     'initial_cell_spacing': 2,
     'division_constant': 1.0,
     'diffusion_constant': 0.5,
-    'dt': 1.0,
     'uptake_rate': 0.1,
-    'num_diffusion_iterations': 30,
-    'monod_constant': 1.0
+    'monod_constant': 1.0,
+    'max_diffusion_iterations': 5000,
+    'diffusion_tol': 1e-4
 }
 
 class Spec(utils.TableObject):
@@ -69,9 +69,9 @@ class SpecTable(tb.IsDescription):
     initial_cell_spacing = tb.UInt16Col()
     division_constant = tb.Float32Col()
     diffusion_constant = tb.Float32Col()
-    dt = tb.Float32Col()
+    diffusion_tol = tb.Float32Col()
     uptake_rate = tb.Float32Col()
-    num_diffusion_iterations = tb.UInt32Col()
+    max_diffusion_iterations = tb.UInt32Col()
     monod_constant = tb.Float32Col()
 Spec.setup_table("specs", SpecTable)
 

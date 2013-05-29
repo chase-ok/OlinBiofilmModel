@@ -37,6 +37,7 @@ class Batch(object):
             for i in range(self.num_models_per_spec):
                 self._print("  Model #{0}".format(i+1))
                 result = self.model_func(spec)
+                result.save()
 
                 for analysis in self.analyses:
                     self._print("    Analysis {0}".format(analysis.func_name))
