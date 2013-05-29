@@ -10,71 +10,90 @@ import random as rdm
 import specs
 import tables; tb = tables
 import utils
+import re
+import utils
 
-ROWS = 64
-COLUMNS = 256
-MODELS_NODE = "models"
+class Result(utils.TableObject):
 
-class ModelResult(tb.IsDescription):
-    id = tb.Int32Col(dflt=0, pos=0)
-    spec_id = tb.Int32Col(dflt=0, pos=1)
-    cells = tb.BoolCol(shape=(ROWS, COLUMNS))
-model_results = utils.QuickTable("model_results", ModelResult,
-                                 filters=tb.Filters(complib='zlib', 
-                                                    complevel=9),
-                                 sorted_indices=['id', 'spec_id'])
+    def __init__(self, uuid=None, spec_uuid=None, image=None, mass=None):
+        utils.TableObject.__init__(self, uuid)
+        self.spec_uuid = spec_uuid
+        self.image = image; self._exclude.add('image')
+        self.mass = mass; self._exclude.add('mass')
 
-def compute_from_spec_id(spec_id):
-    model = from_spec(specs.get_spec(spec_id))
-    model.run()
-    
-    model_result = model_results.table.row
-    id = model_results.table.nrows
-    model_result['id'] = id
-    model_result['spec_id'] = spec_id
-    model_result['cells'] = model.render().astype(bool)
-    model_result.append()
-    model_results.flush()
-    
-    return id
+    @property
+    @utils.memoized
+    def spec(self): return specs.Spec.get(self.spec_uuid)
 
-def compute_from_all_specs(num_reps=5, display_progress=True):
-    for spec in specs.specs.iter_rows(display_progress=display_progress):
-        for _ in range(num_reps):
-            compute_from_spec_id(spec['id'])
-        
-    
-def get_results_by_spec_id(spec_id):
-    id_match = 'spec_id == {0}'.format(spec_id)
-    return [row['cells'] for row in model_results.table.where(id_match)]
+    @property
+    @utils.memoized
+    def int_image(self): return self.image.astype(np.uint8)
 
-def dump_all_results(prefix):
-    for i in range(model_results.table.nrows):
-        model = model_results.table[i]
-        cells = model['cells'].astype(np.uint8)*255
-        name = 'result-{0}-{1}.png'.format(model['spec_id'], model['id'])
-        cv2.imwrite(prefix + name, cells)
+    def _on_get(self, row):
+        self.image = _get_image(self.uuid, self.spec.shape)
+        self.mass = _get_mass(self.uuid, self.spec.stop_on_time)
 
-def from_spec(spec):
-    cls = get_model_class(spec)
-    return cls(spec)
+    def _fill_row(self, row):
+        utils.TableObject._fill_row(self, row)
+        _save_image(self.uuid, self.image)
+        _save_mass(self.uuid, self.mass)
 
-def get_model_class(spec):
-    name = spec.model
-    for match in [ProbabilisticAutomataModel]:
-        if match.__name__ == name:
-            return match
-    raise specs.ParameterValueError("model", name,
-                                    "No such model {0}.".format(name))
+    def _on_delete(self):
+        utils.TableObject._on_delete(self)
+        _delete_image(self.uuid, self.spec.shape)
+        _delete_image(self.uuid, self.spec.stop_on_time)
+
+class ResultTable(tb.IsDescription):
+    uuid = utils.make_uuid_col()
+    spec_uuid = tb.StringCol(32)
+Result.setup_table("results", ResultTable, 
+                   sorted_indices=['uuid', 'spec_uuid'])
+
+_get_image, _save_image, _delete_image \
+        = utils.make_variable_data("_results_image", tb.BoolCol,
+                                   filters=tb.Filters(complib='zlib', 
+                                                      complevel=9))
+_get_mass, _save_mass, _delete_mass \
+        = utils.make_variable_data("_results_mass", tb.UInt16Col,
+                                   filters=tb.Filters(complib='zlib', 
+                                                      complevel=9))
+@utils.memoized
+def _get_image_table(size):
+    class Image(utils.EasyTableObject): pass
+    class ImageTable(tb.IsDescription):
+        uuid = utils.make_uuid_col()
+        image = tb.BoolCol(shape=size)
+
+    name = "_result_images_{0}x{1}".format(*size)
+    Image.setup_table(name, ImageTable,
+                      filters=tb.Filters(complib='zlib', complevel=9))
+    return Image
+
+@utils.memoized
+def _get_mass_table(length):
+    class Mass(utils.EasyTableObject): pass
+    class MassTable(tb.IsDescription):
+        uuid = utils.make_uuid_col()
+        mass = tb.UInt16Col(shape=(1, length))
+
+    name = "_result_mass_{0}".format(length)
+    Mass.setup_table(name, MassTable,
+                     filters=tb.Filters(complib='zlib', complevel=9))
+    return Mass
+
+def compute_probabilistic(spec):
+    model = ProbabilisticAutomataModel(spec)
+    result = model.run()
+    result.save()
+    return result
 
 class Model(object):
     
     def __init__(self, spec):
         self.spec = spec
-        self._p = spec.make_quick_parameters()
         self._verify_parameters()
         
-        self.num_cells = ROWS, COLUMNS
+        self.num_cells = self.spec.shape
         self.min_dimension = min(self.num_cells)
         self.last_growth = 0
         self.time = 0
@@ -103,14 +122,26 @@ class Model(object):
         self.reset()
         
         should_stop = self._get_stopping_function()
+        mass = np.zeros(self.spec.stop_on_time, np.uint16)
         self.time = 0
         while not should_stop():
+            mass[self.time] = self.mass
             self.step()
             self.time += 1
             
+
+        return Result(spec_uuid=self.spec.uuid, 
+                      image=self.render(), 
+                      mass=mass)
+            
     def _get_stopping_function(self):
         clauses = []
-        for name, value in self.spec.stop_on.iteritems():
+        for full_name, value in self.spec.__dict__.iteritems():
+            if value == 0: continue
+            match = re.match(r"stop_on_(\w+)", full_name)
+            if not match: continue
+            name = match.group(1)
+
             if name == "mass":
                 max_mass = int(value)
                 clauses.append(lambda: self.mass >= max_mass)
@@ -145,8 +176,8 @@ class CellularAutomataModel(Model):
         self.dividing = np.zeros(self.num_cells, bool)
         self.surface_tension = np.zeros(self.num_cells, float)
         
-        self.__max_row = ROWS-1
-        self.__max_column = COLUMNS-1
+        self.__max_row = self.num_cells[0]-1
+        self.__max_column = self.num_cells[1]-1
         self.__mass = 0
         self.__max_height = 0
         
@@ -155,19 +186,19 @@ class CellularAutomataModel(Model):
     def _verify_parameters(self):
         super(CellularAutomataModel, self)._verify_parameters()
         
-        self._p.is_between("boundary_layer", 0, 32)
-        self._p.is_between("light_penetration", 0, 1024)
-        self._p.is_between("media_concentration", 0.0, 10.0)
-        self._p.is_between("division_constant", 0.00001, 10.0)
-        self._p.is_between("initial_cell_spacing", 0, COLUMNS-1)
-        self._p.is_between("diffusion_constant", 0.01, 1000.0)
-        self._p.is_between("dt", 0.01, 5.0)
-        self._p.is_between("uptake_rate", 0.001, 5.0)
-        self._p.is_between("num_diffusion_iterations", 1, 10**6)
-        self._p.is_between("monod_constant", 0.0001, 2.0)
+        self.spec.is_between("boundary_layer", 0, 32)
+        self.spec.is_between("light_penetration", 0, 1024)
+        self.spec.is_between("media_concentration", 0.0, 10.0)
+        self.spec.is_between("division_constant", 0.00001, 10.0)
+        self.spec.is_between("initial_cell_spacing", 0, COLUMNS-1)
+        self.spec.is_between("diffusion_constant", 0.01, 1000.0)
+        self.spec.is_between("dt", 0.01, 5.0)
+        self.spec.is_between("uptake_rate", 0.001, 5.0)
+        self.spec.is_between("num_diffusion_iterations", 1, 10**6)
+        self.spec.is_between("monod_constant", 0.0001, 2.0)
         
     def render(self):
-        return self.cells*255
+        return self.cells.astype(bool)
     
     @property
     def mass(self):
@@ -198,25 +229,25 @@ class CellularAutomataModel(Model):
 
     def _place_cells_regularly(self, spacing=None):
         if not spacing:
-            spacing = self._p.initial_cell_spacing
+            spacing = self.spec.initial_cell_spacing
         
         start = int(spacing/2)
-        end = COLUMNS-int(spacing/2)
+        end = self.num_cells[1]-int(spacing/2)
         for column in range(start, end+1, spacing):
             self.set_alive(0, column)
 
     def _make_boundary_layer(self):
-        kernel = _make_circular_kernel(self._p.boundary_layer)
+        kernel = _make_circular_kernel(self.spec.boundary_layer)
         boundary_layer = cv2.filter2D(self.cells, -1, kernel)
         np.logical_not(boundary_layer, out=boundary_layer)
 
         #remove any non-connected segments
         fill_value = 2
-        fill_source = boundary_layer.shape[0]-1, 0
+        fill_source = boundary_layer.shape[0]-1, 0 # (x, y) not (r, c)
         cv2.floodFill(boundary_layer, None, fill_source, fill_value)
 
         in_boundary = boundary_layer != fill_value
-        values = in_boundary[in_boundary]*self._p.media_concentration
+        values = in_boundary[in_boundary]*self.spec.media_concentration
         return in_boundary, values
     
     def _calculate_media(self):
@@ -225,16 +256,16 @@ class CellularAutomataModel(Model):
 
         self.media.fill(0.0)
         self.media[in_boundary] = boundary_values
-        sigma = np.sqrt(2*self._p.diffusion_constant*self._p.dt)
+        sigma = np.sqrt(2*self.spec.diffusion_constant*self.spec.dt)
 
-        for _ in range(self._p.num_diffusion_iterations):
+        for _ in range(self.spec.num_diffusion_iterations):
             cv2.GaussianBlur(self.media, (0, 0), sigma, dst=self.media)
-            self.media[in_cells] *= 1 - self._p.uptake_rate*self._p.dt
+            self.media[in_cells] *= 1 - self.spec.uptake_rate*self.spec.dt
 
     def _calculate_light(self):
-        if self._p.light_penetration != 0.0:
+        if self.spec.light_penetration != 0.0:
             np.cumsum(self.cells, axis=0, out=self.light)
-            self.light /= -float(self._p.light_penetration) # otherwise uint16
+            self.light /= -float(self.spec.light_penetration) # otherwise uint16
             np.exp(self.light, out=self.light)
         else:
             self.light.fill(1.0)
@@ -248,8 +279,8 @@ class CellularAutomataModel(Model):
         self.surface_tension = local_sum/np.float(tension_kernel.sum())
 
     def _calculate_division_probability(self):
-        media_probability = self.media/(self.media + self._p.monod_constant)
-        self.division_probability = self._p.division_constant*\
+        media_probability = self.media/(self.media + self.spec.monod_constant)
+        self.division_probability = self.spec.division_constant*\
                                     media_probability*self.light
         self.division_probability[np.logical_not(self.cells)] = 0
 
@@ -285,8 +316,8 @@ class ProbabilisticAutomataModel(CellularAutomataModel):
     def reset(self):
         super(ProbabilisticAutomataModel, self).reset()
         
-        self._distance_kernel = _generate_distance_kernel(self._p.block_size)
-        self._distance_kernel **= self._p.distance_power
+        self._distance_kernel = _generate_distance_kernel(self.spec.block_size)
+        self._distance_kernel **= self.spec.distance_power
         self._distance_kernel /= self._distance_kernel.sum()
         self._tension_kernel = np.array([[1, 2, 1],
                                          [2, 0, 2],
@@ -294,7 +325,7 @@ class ProbabilisticAutomataModel(CellularAutomataModel):
         self._tension_kernel /= self._tension_kernel.sum()
         self.tension_min = self._tension_kernel[0:1, 0].sum()
         
-        shape = self._p.block_size, self._p.block_size
+        shape = self.spec.block_size, self.spec.block_size
         self._probability = np.empty(shape, np.float32)
         self._cumulative = np.empty(self._probability.size, np.float32)
         self._indices = np.arange(self._probability.size)
@@ -304,11 +335,11 @@ class ProbabilisticAutomataModel(CellularAutomataModel):
     def _verify_parameters(self):
         super(CellularAutomataModel, self)._verify_parameters()
         
-        self._p.is_between("distance_power", 0.0, 4.0)
-        self._p.is_between("tension_power", 0.0, 4.0)
-        self._p.is_between("block_size", 3, 25)
-        if self._p.block_size % 2 != 1:
-            raise specs.ParameterValueError("block_size", self._p.block_size,
+        self.spec.is_between("distance_power", 0.0, 4.0)
+        self.spec.is_between("tension_power", 0.0, 4.0)
+        self.spec.is_between("block_size", 3, 25)
+        if self.spec.block_size % 2 != 1:
+            raise specs.ParameterValueError("block_size", self.spec.block_size,
                                             "Must be an odd integer.")
 
     def step(self):
@@ -317,7 +348,7 @@ class ProbabilisticAutomataModel(CellularAutomataModel):
         self._divide()
 
     def _divide(self):        
-        block_size = self._p.block_size # shortcut
+        block_size = self.spec.block_size # shortcut
         half_block = (block_size-1)/2
         
         rows, columns = map(list, self.dividing.nonzero())
@@ -328,7 +359,7 @@ class ProbabilisticAutomataModel(CellularAutomataModel):
             cv2.threshold(self._probability, self.tension_min, 0, 
                           cv2.THRESH_TOZERO, self._probability)
             self._probability[self._cell_block] = 0
-            self._probability **= self._p.tension_power
+            self._probability **= self.spec.tension_power
             self._probability *= self._distance_kernel
             
             # optimized version of np.random.choice

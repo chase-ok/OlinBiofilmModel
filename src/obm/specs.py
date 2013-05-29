@@ -9,48 +9,86 @@ import utils
 import numpy as np
 from itertools import product
 
-DEFAULT_MODEL = "ProbabilisticAutomataModel"
-MODEL_ENUM = tb.Enum([DEFAULT_MODEL])
+DEFAULT_PARAMETERS = {
+    'stop_on_mass': 4000,
+    'stop_on_time': 20000,
+    'stop_on_height': 64,
+    'stop_on_no_growth': 300,
+    'width': 128,
+    'height': 64,
+    'block_size': 11,
+    'boundary_layer': 10,
+    'media_concentration': 1.0,
+    'light_penetration': 16,
+    'distance_power': 2.0,
+    'tension_power': 2.5,
+    'initial_cell_spacing': 2,
+    'division_constant': 1.0,
+    'diffusion_constant': 0.5,
+    'dt': 1.0,
+    'uptake_rate': 0.1,
+    'num_diffusion_iterations': 30,
+    'monod_constant': 1.0
+}
 
-class Spec(tb.IsDescription):
-    id = tb.Int32Col(dflt=0, pos=0)
-    model = tb.EnumCol(MODEL_ENUM, DEFAULT_MODEL, base='uint8')
-    stop_on_mass = tb.UInt32Col(dflt=4000)
-    stop_on_time = tb.UInt32Col(dflt=20000)
-    stop_on_height = tb.UInt32Col(dflt=0)
-    stop_on_no_growth = tb.UInt32Col(dflt=300)
-    block_size = tb.UInt8Col(dflt=15)
-    boundary_layer = tb.UInt8Col(dflt=10)
-    media_concentration = tb.Float32Col(dflt=1.0)
-    light_penetration = tb.UInt16Col(dflt=16)
-    distance_power = tb.Float32Col(dflt=2.0)
-    tension_power = tb.Float32Col(dflt=2.5)
-    initial_cell_spacing = tb.UInt16Col(dflt=2)
-    division_constant = tb.Float32Col(dflt=1.0)
-    diffusion_constant = tb.Float32Col(dflt=0.5)
-    dt = tb.Float32Col(dflt=1.0)
-    uptake_rate = tb.Float32Col(dflt=0.1)
-    num_diffusion_iterations = tb.UInt32Col(dflt=30)
-    monod_constant = tb.Float32Col(dflt=1.0)
+class Spec(utils.TableObject):
 
-specs = utils.QuickTable("specs", Spec,
-                         filters=tb.Filters(complib='blosc', complevel=1),
-                         sorted_indices=['id'])
+    def __init__(self, uuid=None, **kwargs):
+        utils.TableObject.__init__(self, uuid)
+        params = _with_defaults(kwargs, DEFAULT_PARAMETERS)
+        for name, value in params.iteritems():
+            setattr(self, name, value)
 
-def create_spec(**kwargs):
-    spec = specs.table.row
-    id = specs.table.nrows
-    spec['id'] = id
-    for key, value in kwargs.iteritems():
-        spec[key] = value
-    spec.append()
-    
-    specs.flush() # have to flush to update nrows
-    return id
+    @property
+    def shape(self): return (self.height, self.width)
 
-def get_spec(id, wrapped=True):
-    spec = specs.read_single('id == {0}'.format(id))
-    return _SpecWrapper(spec) if wrapped else spec
+    def is_between(self, name, min_value, max_value):
+        value = getattr(self, name)
+        if value < min_value or value > max_value:
+            raise ParameterValueError(name, value, 
+                                      "Must be in the range {1} to {2}."\
+                                      .format(min_value, max_value))
+        
+    def __repr__(self):
+        return "{0}({1})".format(self.__class__.__name__, self.__dict__)
+
+class SpecTable(tb.IsDescription):
+    uuid = utils.make_uuid_col()
+    stop_on_mass = tb.UInt32Col()
+    stop_on_time = tb.UInt32Col()
+    stop_on_height = tb.UInt32Col()
+    stop_on_no_growth = tb.UInt32Col()
+    width = tb.UInt16Col()
+    height = tb.UInt16Col()
+    block_size = tb.UInt8Col()
+    boundary_layer = tb.UInt8Col()
+    media_concentration = tb.Float32Col()
+    light_penetration = tb.UInt16Col()
+    distance_power = tb.Float32Col()
+    tension_power = tb.Float32Col()
+    initial_cell_spacing = tb.UInt16Col()
+    division_constant = tb.Float32Col()
+    diffusion_constant = tb.Float32Col()
+    dt = tb.Float32Col()
+    uptake_rate = tb.Float32Col()
+    num_diffusion_iterations = tb.UInt32Col()
+    monod_constant = tb.Float32Col()
+Spec.setup_table("specs", SpecTable)
+
+class ParameterValueError(Exception):
+    def __init__(self, name, value, reason=None):
+        super(ParameterValueError, self).__init__({'name':name, 
+                                                   'value':value, 
+                                                   'reason':reason})
+
+def _with_defaults(d, defaults):
+    new_d = defaults.copy()
+    if d:
+        for key, value in d.iteritems():
+            if key not in defaults:
+                raise ValueError("{0} not a valid key.".format(key))
+            new_d[key] = value
+    return new_d
     
 class SpecBuilder(object):
     
@@ -72,75 +110,13 @@ class SpecBuilder(object):
     
     def build(self):
         for value_set in self.value_sets:
-            create_spec(**value_set)
-        specs.flush()
+            spec = Spec(**value_set)
+            spec.save(flush=False)
+        Spec.table.flush()
+        self.clear()
+
+    def clear(self):
         self._all_values = {}
-
-
-class ParameterValueError(Exception):
-    def __init__(self, name, value, reason=None):
-        super(ParameterValueError, self).__init__({'name':name, 
-                                                   'value':value, 
-                                                   'reason':reason})
-    
-class _QuickParameterObject(object):
-    
-    def __init__(self, parameters):
-        self.__dict__ = parameters
-        
-    def is_between(self, name, min_value, max_value):
-        value = getattr(self, name)
-        if value < min_value or value > max_value:
-            raise ParameterValueError(name, value, 
-                                      "Must be in the range {1} to {2}."\
-                                      .format(min_value, max_value))
-        
-    def __repr__(self):
-        return "{0}({1})".format(self.__class__.__name__, self.__dict__)
-
-class _SpecWrapper(object):
-    
-    def __init__(self, row):
-        self._row = row
-    
-    @property
-    def id(self):
-        return self._row['id']
-    
-    @property
-    def model(self):
-        return MODEL_ENUM(self._row['model'])
-    
-    @property
-    def stop_on(self):
-        stop_on = {}
-        for prop in ['mass', 'time', 'height', 'no_growth']:
-            value = self._row['stop_on_' + prop]
-            if value != 0:
-                stop_on[prop] = value
-        return stop_on
-    
-    @property
-    def parameters(self):
-        params = {}
-        for param in ['block_size', 
-                      'boundary_layer', 
-                      'media_concentration', 
-                      'light_penetration',
-                      'distance_power', 
-                      'tension_power', 
-                      'initial_cell_spacing', 
-                      'division_constant',
-                      'diffusion_constant',
-                      'dt',
-                      'uptake_rate',
-                      'num_diffusion_iterations',
-                      'monod_constant']:
-            params[param] = self._row[param]
-        return params
-    
-    def make_quick_parameters(self):
-        return _QuickParameterObject(self.parameters)
 
 def make_query(use_defaults=False, **conditions):
     specified = set()
@@ -152,9 +128,9 @@ def make_query(use_defaults=False, **conditions):
         clauses.extend((column + clause) for clause in column_clauses)
     
     if use_defaults:
-        for column, data_type in Spec.columns.iteritems():
-            if column != 'id' and column not in specified:
-                clauses.append("{0}=={1}".format(column, data_type.dflt))
+        for param, value in DEFAULT_PARAMETERS.iteritems():
+            if param not in specified:
+                clauses.append("{0}=={1}".format(param, value))
     
     return "&".join("({0})".format(clause) for clause in clauses)
         
