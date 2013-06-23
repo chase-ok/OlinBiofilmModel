@@ -42,7 +42,7 @@ class Result(utils.TableObject):
     def _on_delete(self):
         utils.TableObject._on_delete(self)
         _delete_image(self.uuid, self.spec.shape)
-        _delete_image(self.uuid, self.spec.stop_on_time)
+        _delete_mass(self.uuid, self.spec.stop_on_time)
 
 class ResultTable(tb.IsDescription):
     uuid = utils.make_uuid_col()

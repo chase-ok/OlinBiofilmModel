@@ -21,8 +21,10 @@ def _setup_spec_queue(num_repeats=5):
     with _spec_lock:
         for spec in specs.Spec.all():
             _all_specs.append(spec.uuid)
-            _to_run.add(spec.uuid)
-            _num_remaining[spec.uuid] = num_repeats
+
+            num_found = len(models.Result.table.raw.getWhereList('spec_uuid=="{0}"'.format(spec.uuid)))
+            _num_remaining[spec.uuid] = num_repeats - num_found
+            if _num_remaining[spec.uuid] > 0: _to_run.add(spec.uuid)
 
 def _log_completed(spec_uuid):
     with _spec_lock:

@@ -143,6 +143,10 @@ class TableObject(object):
         return cls._from_row(row)
 
     @classmethod
+    def get_by_row(cls, row):
+        return cls.get(cls.table.raw[row]['uuid'])
+
+    @classmethod
     def _from_row(cls, row):
         obj = cls(uuid=row['uuid'])
         fields = row.fetch_all_fields()
@@ -160,6 +164,11 @@ class TableObject(object):
     def reset(cls):
         for obj in cls.all(): obj._on_delete()
         cls.table.reset()
+
+    @classmethod
+    def where(cls, query):
+        for row in cls.table.raw.where(query):
+            yield cls._from_row(row)
 
     @classmethod
     def setup_table(cls, node, description, 

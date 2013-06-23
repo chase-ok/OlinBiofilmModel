@@ -133,18 +133,3 @@ def make_query(use_defaults=False, **conditions):
                 clauses.append("{0}=={1}".format(param, value))
     
     return "&".join("({0})".format(clause) for clause in clauses)
-        
-boundary_vs_media_query = make_query(id='<100')
-
-distance_vs_tension_query = make_query(id=('>=100', '<200'))
-distance_vs_tension_gt0_query = make_query(id=('>=100', '<200'),
-                                           distance_power='>0',
-                                           tension_power='>0')
-
-light_vs_division_query = make_query(id=('>=200', '<920'))
-
-light_overhang_query = make_query(id=('>=200', '<920'),
-                                  distance_power='==1.0',
-                                  tension_power='==1.0',
-                                  division_constant='==1.0')
-

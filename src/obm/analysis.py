@@ -11,119 +11,268 @@ import tables; tb = tables
 import utils
 import models
 from scipy import interpolate
-#from matplotlib import pyplot as plt
+from matplotlib import pyplot as plt
+from itertools import chain
 
-def _make_field(func=None, path=None, column=None, **table_args):
-    class Field(utils.EasyTableObject): pass
-    class FieldTable(tb.IsDescription):
-        uuid = utils.make_uuid_col()
-        data = column
-    Field.setup_table(path, FieldTable, **table_args)
+class Field(object):
 
-    def get(result):
+    def __init__(self, func=None, path='', column=tb.Float32Col(), 
+                 **table_args):
+        self.func = func
+        self.path = path
+        self._make_tables(column, table_args)
+    
+    def _make_tables(self, column, table_args):
+        self._make_by_result(column, table_args)
+        self._make_by_spec()
+
+    def _make_by_result(self, column, table_args):
+        class ByResult(utils.EasyTableObject): pass
+        class ByResultTable(tb.IsDescription):
+            uuid = utils.make_uuid_col()
+            data = column
+        ByResult.setup_table(self.path, ByResultTable, **table_args)
+        self._by_result = ByResult
+
+    def _make_by_spec(self):
+        class BySpec(utils.EasyTableObject): pass
+        class BySpecTable(tb.IsDescription):
+            uuid = utils.make_uuid_col()
+            mean = tb.Float32Col()
+            median = tb.Float32Col()
+            std = tb.Float32Col()
+            max = tb.Float32Col()
+            min = tb.Float32Col()
+        BySpec.setup_table(self.path + "_by_spec", BySpecTable, 
+                           filters=tb.Filters(complib='blosc', complevel=1))
+        self._by_spec = BySpec
+
+    def reset(self):
+        self._by_result.table.reset()
+        self._by_spec.table.reset()
+
+    def get_by_result(self, result):
         try:
-            return Field.get(result.uuid).data
+            return self._by_result.get(result.uuid).data
         except KeyError:
-            return compute(result)
-    get.func_name = "get_{0}".format(path)
+            return self.compute_by_result(result)
 
-    def compute(result):
-        field = func(result)
-        Field(uuid=result.uuid, data=field).save()
-        return field
-    compute.func_name = "compute_{0}".format(path)
+    def compute_by_result(self, result):
+        data = self.func(result)
+        self._by_result(uuid=result.uuid, data=data).save()
+        return data
 
-    def delete(result): Field(uuid=result.uuid).delete()
-    delete.func_name = "delete_{0}".format(path)
+    def delete_by_result(self, result):
+        self._by_result(uuid=result.uuid).delete()
 
-    return compute, get, delete
-
-
-def _make_variable_field(func=None, shape=None, 
-                         path="", column=None, **table_args):
-    get_field, save_field, delete_field \
-            = utils.make_variable_data(path, column, **table_args)
-
-    def get(result):
+    def get_by_spec(self, spec):
         try:
-            return get_field(result.uuid, result.spec.width)
+            data = self._by_spec.get(spec.uuid)
+            return dict(mean=data.mean, median=data.median, std=data.std,
+                        max=data.max, min=data.min)
         except KeyError:
-            return compute(result)
-    get.func_name = "get_{0}".format(path)
+            return self.compute_by_spec(spec)
 
-    def compute(result):
-        field = func(result)
-        save_field(result.uuid, field)
-        return field
-    compute.func_name = "compute_{0}".format(path)
+    def _wrap(self, data):
+        summary = utils.row_to_dict(data)
+        del summary['uuid']
+        return summary
 
-    def delete(result): delete_field(result.uuid, shape(result))
-    delete.func_name = "delete_{0}".format(path)
+    def compute_by_spec(self, spec, recompute=False):
+        matching = "spec_uuid=='{0}'".format(spec.uuid)
+        func = self.compute_by_result if recompute else self.get_by_result
+        data = np.array([func(res) for res in models.Result.where(matching)])
+        summary = self._summarize(data)
+        self._by_spec(uuid=spec.uuid, **summary).save()
+        return summary
 
-    return compute, get, delete
+    def delete_by_spec(self, spec):
+        self._by_spec(uuid=spec.uuid).delete()
 
-def _make_distribution_field(func=None, path=None, **table_args):
-    def compute_distribution(results):
-        data = func(results)
-        return data.mean(), np.median(data), data.std(), data.max(), data.min()
-    _compute, _get, delete = _make_field(func=compute_distribution,
-                                         path=path,
-                                         column=tb.Float32Col(shape=(5,)))
-    def wrap(data):
-        return dict(mean=data[0], median=data[1], std=data[2], 
-                    max=data[3], min=data[4])
+    def _summarize(self, data):
+        return dict(mean=data.mean(), median=np.median(data),
+                    std=data.std(), max=data.max(), min=data.min())
 
-    def compute(result): return wrap(_compute(result))
-    compute.func_name = "compute_{0}".format(path)
-    def get(result): return wrap(_get(result))
-    get.func_name = "get_{0}".format(path)
-    delete.func_name = "delete_{0}".format(path)
+    def phase_diagram_2d(self, parameter1, parameter2, num_cells=50, 
+                         spec_query=None, statistic='mean', show=False, 
+                         **plot_args):
+        specs = self._query_specs(spec_query)
+        
+        shape = len(specs), 1
+        xs = np.empty(shape, float)
+        ys = np.empty(shape, float)
+        values = np.empty(shape, float)
+        
+        for i, spec in enumerate(specs):
+            xs[i] = float(getattr(spec, parameter1))
+            ys[i] = float(getattr(spec, parameter2))
+            values[i] = self._get_statistic(spec, statistic)
+        
+        xMin, xMax = xs.min(), xs.max()
+        yMin, yMax = ys.min(), ys.max()
+        
+        assert xMin != xMax
+        assert yMin != yMax
+        
+        grid = np.mgrid[xMin:xMax:num_cells*1j, 
+                        yMin:yMax:num_cells*1j]
+        interp = interpolate.griddata(np.hstack((xs, ys)), 
+                                      values, 
+                                      np.vstack((grid[0].flat, grid[1].flat)).T, 
+                                      'cubic')
+        valueGrid = np.reshape(interp, grid[0].shape)
+        
+        plt.pcolormesh(grid[0], grid[1], valueGrid, **plot_args)
+        plt.xlim(xMin, xMax)
+        plt.ylim(yMin, yMax)
+        plt.xlabel(parameter1)
+        plt.ylabel(parameter2)
+        plt.colorbar()
+        plt.title(self.path)
+        if show: plt.show()
 
-    return compute, get, delete
+    def scatter_plot(self, y_field, spec_query=None, statistic='mean',
+                     show=False, **plot_args):
+        specs = self._query_specs(spec_query)
+        xs = np.empty(len(specs), float)
+        ys = np.empty_like(xs)
+
+        for i, spec in enumerate(specs):
+            xs[i] = self._get_statistic(spec, statistic)
+            ys[i] = y_field._get_statistic(spec, statistic)
+
+        plt.plot(xs, ys, '.', **plot_args)
+        plt.xlabel(self.path)
+        plt.ylabel(y_field.path)
+        if show: plt.show()
+
+        return xs, ys
+
+    def _query_specs(self, spec_query):
+        if spec_query:
+            return list(sp.Spec.where(spec_query))
+        else:
+            return list(sp.Spec.all())
+
+    def _get_statistic(self, spec, statistic):
+        return self.get_by_spec(spec)[statistic]
 
 
-def compute_heights(result):
+class VariableField(Field):
+
+    def __init__(self, shape=lambda r: 1, **field_args):
+        Field.__init__(self, **field_args)
+        self.shape = shape
+
+    def _make_by_result(self, column, table_args):
+        self._get_by_result, self._save_by_result, self._delete_by_result \
+                = utils.make_variable_data(self.path, column, **table_args)
+
+    def reset(self):
+        raise NotImplemented()
+
+    def get_by_result(self, result):
+        try:
+            return self._get_by_result(result.uuid, self.shape(result))
+        except KeyError:
+            return self.compute_by_result(result)
+
+    def compute_by_result(self, result):
+        data = self.func(result)
+        self._save_by_result(result.uuid, data)
+        return data
+
+    def delete_by_result(self, result):
+        self._delete_by_result(result.uuid, self.shape(result))
+
+    def _summarize(self, data):
+        combined = list(chain.from_iterable(data))
+        return Field._summarize(self, np.array(combined))
+
+class CurveAveragingField(VariableField):
+
+    def __init__(self, spec_shape=lambda s: 1, **var_args):
+        self.spec_shape = spec_shape
+        VariableField.__init__(self, **var_args)
+
+    def _make_by_spec(self):
+        self._get_by_spec, self._save_by_spec, self._delete_by_spec \
+                = utils.make_variable_data(self.path + "_by_spec", 
+                                           tb.Float32Col)
+
+    def get_by_spec(self, spec):
+        try:
+            return self._get_by_spec(spec.uuid, self.spec_shape(spec))
+        except KeyError:
+            return self.compute_by_spec(spec)
+
+    def compute_by_spec(self, spec):
+        matching = "spec_uuid=='{0}'".format(spec.uuid)
+        data = [self.compute_by_result(res) 
+                for res in models.Result.where(matching)]
+        summary = self._summarize(data)
+        self._save_by_spec(spec.uuid, summary)
+        return summary
+
+    def delete_by_result(self, spec):
+        self._delete_by_result(result.uuid, self.spec_shape(spec))
+
+    def _summarize(self, data):
+        if not data: return None
+
+        averaged = np.copy(data[0])
+        for i in range(1, len(data)):
+            averaged += data[i]
+        return averaged/float(len(data))
+
+    def curve_plot(self, spec_query=None, show=False):
+        specs = self._query_specs(spec_query)
+
+        plt.hold(True)
+        for spec in specs:
+            plt.plot(self.get_by_spec(spec))
+
+        plt.ylabel(self.path)
+        if show: plt.show()
+
+    def average_curve_plot(self, spec_query=None, show=False, **plot_args):
+        specs = self._query_specs(spec_query)
+        data = [self.get_by_spec(spec) for spec in specs]
+        plt.plot(self._summarize(data), **plot_args)
+        plt.ylabel(self.path)
+        if show: plt.show()
+
+def _compute_heights(result):
     im = result.image
     heights = np.zeros(im.shape[1], dtype=int)
     for row in reversed(range(im.shape[0])):
         heights[np.logical_and((heights == 0), im[row, :])] = row
     return heights
-
-compute_heights, get_heights, delete_heights \
-        = _make_variable_field(func=compute_heights,
-                               shape=lambda r: r.image.shape[1],
-                               path="heights", 
-                               column=tb.UInt16Col)
-compute_height_dist, get_height_dist, delete_height_dist \
-        = _make_distribution_field(func=get_heights, path="height_dist")
-
+heights = VariableField(func=_compute_heights,
+                        shape=lambda r: r.image.shape[1],
+                        path="heights",
+                        column=tb.UInt16Col)
 
 def _compute_contours(result):
     return cv2.findContours(np.copy(result.int_image), 
                             cv2.RETR_LIST, 
                             cv2.CHAIN_APPROX_SIMPLE)[0]
 
-def compute_perimeter(result):
+def _compute_perimeter(result):
     return sum(cv2.arcLength(c, True) for c in _compute_contours(result))\
            /float(result.spec.width)
+perimeter = Field(func=_compute_perimeter, path="perimeter")
 
-compute_perimeter, get_perimeter, delete_perimeter \
-        = _make_field(func=compute_perimeter,
-                      path="perimeter",
-                      column=tb.Float32Col())
-
-
-def compute_coverages(result):
+def _compute_coverages(result):
     return result.image.sum(axis=1)/float(result.spec.width)
+coverages = CurveAveragingField(func=_compute_coverages,
+                                shape=lambda r: r.spec.height,
+                                spec_shape=lambda s: s.height,
+                                path="coverages",
+                                column=tb.Float32Col)
 
-compute_coverages, get_coverages, delete_coverages \
-        = _make_variable_field(func=compute_coverages,
-                               shape=lambda r: r.spec.width,
-                               path="coverages", 
-                               column=tb.Float32Col)
 
-
-def compute_overhangs(result):
+def _compute_overhangs(result):
     overhangs = np.zeros(result.spec.width, int)
     empty_count = np.zeros_like(overhangs)
         
@@ -134,14 +283,12 @@ def compute_overhangs(result):
         empty_count[alive] = 0
 
     return overhangs
+overhangs = VariableField(func=_compute_overhangs,
+                          shape=lambda r: r.spec.width,
+                          path="overhangs",
+                          column=tb.UInt16Col)
 
-compute_coverages, get_coverages, delete_coverages \
-        = _make_variable_field(func=compute_coverages,
-                               shape=lambda r: r.spec.width,
-                               path="coverages", 
-                               column=tb.UInt16Col)
-
-def compute_x_correlations(result):
+def _compute_x_correlations(result):
     distances = range(1, result.spec.width/2)
     x_correlations = np.zeros((result.spec.height, len(distances)), float)
     found = np.empty(len(distances), int)
@@ -167,15 +314,12 @@ def compute_x_correlations(result):
         x_correlations[row, :] = found.astype(float)/count
 
     return x_correlations
-
-compute_x_correlations, get_x_correlations, delete_x_correlations \
-        = _make_variable_field(func=compute_x_correlations,
+x_correlations = VariableField(func=_compute_x_correlations,
                                shape=lambda r: (r.spec.height, r.spec.width/2),
-                               path="x_correlations", 
+                               path="x_correlations",
                                column=tb.Float32Col)
 
-
-def compute_convex_hull_area(result):
+def _compute_convex_hull_area(result):
     area = 0.0
     for contour in _compute_contours(result):
         try:
@@ -184,11 +328,25 @@ def compute_convex_hull_area(result):
         except:
             continue
     return area
+convex_hull_area = Field(func=_compute_convex_hull_area,
+                         path="convex_hull_area")
 
-compute_convex_hull_area, get_convex_hull_area, delete_convex_hull_area \
-        = _make_field(func=compute_convex_hull_area,
-                      path="convex_hull_area",
-                      column=tb.Float32Col())
+def _compute_convex_density(result):
+    area = float(convex_hull_area.get_by_result(result))
+    return 0.0 if area <= 1.0 else mass.get_by_result(result)/area
+convex_density = Field(func=_compute_convex_density, path="convex_density")
+
+def _compute_mass(result):
+    return result.mass.max()
+mass = Field(func=_compute_mass, path="mass", column=tb.UInt32Col())
+
+def _compute_light_exposure(result):
+    penetration_depth = 6.0 #result.spec.light_penetration
+    cum_sum = result.image.cumsum(axis=0)
+    light = np.exp(-cum_sum/penetration_depth)
+    return (light*result.image).sum()
+light_exposure = Field(func=_compute_light_exposure, path="light_exposure")
+
 
 # class BasicAnalysisTable(tb.IsDescription):
 #     uuid = tb.StringCol(32, pos=0)

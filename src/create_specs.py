@@ -1,12 +1,14 @@
 from obm import specs
 import numpy as np
 
-b = specs.SpecBuilder()
-b.add('boundary_layer', *range(3, 17, 2))
-b.add('light_penetration', *range(0, 32, 2))
-b.add('light_penetration', *range(32, 65, 6))
-b.add('diffusion_constant', *np.linspace(0.1, 2.0, 15))
-b.add('uptake_rate', *np.linspace(0.01, 1.0, 15))
-b.add('max_diffusion_iterations', 2500)
-
-b.build()
+builder = specs.SpecBuilder()
+builder.add("boundary_layer", 10)
+builder.add("stop_on_no_growth", 300)
+builder.add("stop_on_time", 20000)
+builder.add("stop_on_mass", 2000)
+builder.add("light_penetration", 0, 8, 16)
+builder.add("diffusion_constant", *np.linspace(0.01, 1.0, 20))
+builder.add("uptake_rate", *np.linspace(0.01, 1.0, 20))
+builder.add("height", 40)
+builder.add("initial_cell_spacing", 2, 8, 16, 64)
+builder.build()
