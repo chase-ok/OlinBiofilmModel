@@ -241,20 +241,46 @@ class CellularAutomataModel(Model):
 
         #remove any non-connected segments
         fill_value = 2
-        fill_source = boundary_layer.shape[0]-1, 0 # (x, y) not (r, c)
+        # (x, y) not (r, c), because fuck you opencv
+        fill_source = boundary_layer.shape[1]//2, boundary_layer.shape[0]-1 
         cv2.floodFill(boundary_layer, None, fill_source, fill_value)
 
-        return boundary_layer != fill_value
+        return boundary_layer == fill_value
     
     def _calculate_media(self, check_start=40, check_interval_growth=5):
         check_interval = check_interval_growth
-        dt = 1.0/(4*self.spec.diffusion_constant)
+        limiting = max(self.spec.uptake_rate, self.spec.diffusion_constant)
+        dt = 1.0/(4*limiting)
 
         cells = self._narrow_cells()
         boundary = self._make_boundary_layer(cells)
 
-        media = cells*self.spec.media_concentration
+        media = np.ones_like(cells, np.float32)*self.spec.media_concentration
+        # guess a linear solution for faster convergence
+        heights = utils.compute_heights(np.logical_not(boundary))
+        for col, height in enumerate(heights):
+            if height == 0: continue
+            media[:height, col] = np.linspace(0, self.spec.media_concentration,
+                                              height)
         media_next = np.empty_like(media)
+
+        # def error_handler(type, flag):
+        #     if type == "underflow": return
+        #     np.seterr(all='warn')
+        #     print "Floating point error (%s), with flag %s" % (type, flag)
+        #     print dt, self.spec.diffusion_constant, self.spec.uptake_rate
+        #     print self.spec.media_concentration
+        #     from matplotlib import pyplot as plt
+        #     plt.figure(); plt.imshow(media); plt.colorbar()
+        #     plt.figure(); plt.imshow(media_next); plt.colorbar()
+        #     plt.figure(); plt.imshow(boundary); plt.colorbar()
+        #     plt.figure(); plt.imshow(cells); plt.colorbar()
+        #     plt.show()
+        #     print step
+        #     raise Exception()
+
+        # np.seterrcall(error_handler)
+        # np.seterr(all='call')
 
         for step in range(self.spec.max_diffusion_iterations):
             laplace(media, output=media_next)
@@ -272,9 +298,18 @@ class CellularAutomataModel(Model):
                 check_interval += check_interval_growth
 
         self.media = media
+        if self.time % 5000 == 0:
+            from matplotlib import pyplot as plt
+            plt.clf()
+            plt.imshow(media)
+            plt.colorbar()
+            plt.savefig("diffusion{0}.png".format(self.time))
 
     def _narrow_cells(self):
-        return self.cells[0:self.max_height+self.spec.boundary_layer+1, :] > 0
+        # it turns out boundary_layer is half of what its defined as, due to
+        # the make kernel implementation!
+        height = self.max_height+self.spec.boundary_layer//2+2
+        return self.cells[:height, :] > 0
 
     def _calculate_light(self):
         if self.spec.light_penetration != 0.0:
@@ -392,9 +427,11 @@ class ProbabilisticAutomataModel(CellularAutomataModel):
                                                        self._probability.shape)
             self.set_alive(row+(local_row-half_block), 
                            column+(local_column-half_block))
-    
-def _make_circular_kernel(radius):
-    return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius, radius))
+
+
+# diameter not radius! fuckkkk
+def _make_circular_kernel(diameter):
+    return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (diameter, diameter))
 
 def _generate_distance_kernel(size=7):
     kernel = np.empty((size, size), dtype=float)

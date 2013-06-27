@@ -31,7 +31,9 @@ class Field(object):
         class ByResultTable(tb.IsDescription):
             uuid = utils.make_uuid_col()
             data = column
-        ByResult.setup_table(self.path, ByResultTable, **table_args)
+        ByResult.setup_table(self.path, ByResultTable, 
+                             expectedrows=models.Result.table.raw.nrows,
+                             **table_args)
         self._by_result = ByResult
 
     def _make_by_spec(self):
@@ -44,54 +46,59 @@ class Field(object):
             max = tb.Float32Col()
             min = tb.Float32Col()
         BySpec.setup_table(self.path + "_by_spec", BySpecTable, 
-                           filters=tb.Filters(complib='blosc', complevel=1))
+                           filters=tb.Filters(complib='blosc', complevel=1),
+                           expectedrows=specs.Spec.table.raw.nrows)
         self._by_spec = BySpec
 
     def reset(self):
         self._by_result.table.reset()
         self._by_spec.table.reset()
 
-    def get_by_result(self, result):
+    def get_by_result(self, result, **compute_args):
         try:
             return self._by_result.get(result.uuid).data
         except KeyError:
-            return self.compute_by_result(result)
+            return self.compute_by_result(result, **compute_args)
 
-    def compute_by_result(self, result):
+    def compute_by_result(self, result, flush=True):
         data = self.func(result)
-        self._by_result(uuid=result.uuid, data=data).save()
+        self._by_result(uuid=result.uuid, data=data).save(flush=flush)
         return data
 
     def delete_by_result(self, result):
         self._by_result(uuid=result.uuid).delete()
 
-    def get_by_spec(self, spec):
+    def get_by_spec(self, spec, **compute_args):
         try:
             data = self._by_spec.get(spec.uuid)
             return dict(mean=data.mean, median=data.median, std=data.std,
                         max=data.max, min=data.min)
         except KeyError:
-            return self.compute_by_spec(spec)
+            return self.compute_by_spec(spec, **compute_args)
 
     def _wrap(self, data):
         summary = utils.row_to_dict(data)
         del summary['uuid']
         return summary
 
-    def compute_by_spec(self, spec, recompute=False):
+    def compute_by_spec(self, spec, recompute=False, flush=True):
         matching = "spec_uuid=='{0}'".format(spec.uuid)
         func = self.compute_by_result if recompute else self.get_by_result
         data = np.array([func(res) for res in models.Result.where(matching)])
         summary = self._summarize(data)
-        self._by_spec(uuid=spec.uuid, **summary).save()
+        self._by_spec(uuid=spec.uuid, **summary).save(flush=flush)
         return summary
 
     def delete_by_spec(self, spec):
         self._by_spec(uuid=spec.uuid).delete()
 
     def _summarize(self, data):
-        return dict(mean=data.mean(), median=np.median(data),
-                    std=data.std(), max=data.max(), min=data.min())
+        if data.size > 0:
+            return dict(mean=data.mean(), median=np.median(data),
+                        std=data.std(), max=data.max(), min=data.min())
+        else:
+            print "WARNING: Empty data!"
+            return dict(mean=0.0, median=0.0, std=0.0, max=0.0, min=0.0)
 
     def phase_diagram_2d(self, parameter1, parameter2, num_cells=50, 
                          spec_query=None, statistic='mean', show=False, 
@@ -128,6 +135,60 @@ class Field(object):
         plt.xlabel(parameter1)
         plt.ylabel(parameter2)
         plt.colorbar()
+        plt.title(self.path)
+        if show: plt.show()
+
+    def contour_plot(self, parameter1, parameter2, num_cells=50, 
+                     spec_query=None, statistic='mean', show=False, 
+                     smoothing=None, **plot_args):
+        specs = self._query_specs(spec_query)
+        
+        shape = len(specs), 1
+        xs = np.empty(shape, float)
+        ys = np.empty(shape, float)
+        values = np.empty(shape, float)
+        
+        for i, spec in enumerate(specs):
+            xs[i] = float(getattr(spec, parameter1))
+            ys[i] = float(getattr(spec, parameter2))
+            values[i] = self._get_statistic(spec, statistic)
+        
+        xMin, xMax = xs.min(), xs.max()
+        yMin, yMax = ys.min(), ys.max()
+        
+        assert xMin != xMax
+        assert yMin != yMax
+        
+        grid = np.mgrid[xMin:xMax:num_cells*1j, 
+                        yMin:yMax:num_cells*1j]
+        interp = interpolate.griddata(np.hstack((xs, ys)), 
+                                      values, 
+                                      np.vstack((grid[0].flat, grid[1].flat)).T, 
+                                      'cubic')
+        valueGrid = np.reshape(interp, grid[0].shape)
+
+        #try:
+        #    valueGrid.clip(plot_args['vmin'], plot_args['vmax'], out=valueGrid)
+        #except: KeyError
+
+        if smoothing is not None:
+            #from scipy.ndimage.filters import gaussian_filter
+            #gaussian_filter(valueGrid, smoothing, output=valueGrid)
+            from scipy.ndimage.interpolation import zoom
+            gx = zoom(grid[0], smoothing)
+            gy = zoom(grid[1], smoothing)
+            valueGrid = zoom(valueGrid, smoothing)
+        else:
+            gx, gy = grid[0], grid[1]
+        
+        contour = plt.contour(gx, gy, valueGrid, **plot_args)
+        plt.clabel(contour, inline=True, fontsize=10)
+        plt.grid(True)
+        plt.xlim(xMin, xMax)
+        plt.ylim(yMin, yMax)
+        plt.xlabel(parameter1)
+        plt.ylabel(parameter2)
+        #plt.colorbar()
         plt.title(self.path)
         if show: plt.show()
 
@@ -243,23 +304,23 @@ class CurveAveragingField(VariableField):
         if show: plt.show()
 
 def _compute_heights(result):
-    im = result.image
-    heights = np.zeros(im.shape[1], dtype=int)
-    for row in reversed(range(im.shape[0])):
-        heights[np.logical_and((heights == 0), im[row, :])] = row
-    return heights
+    return utils.compute_heights(result.image)
 heights = VariableField(func=_compute_heights,
                         shape=lambda r: r.image.shape[1],
                         path="heights",
                         column=tb.UInt16Col)
 
-def _compute_contours(result):
-    return cv2.findContours(np.copy(result.int_image), 
+def _compute_contours(int_image):
+    # findContours clips the borders of an image
+    larger_image = np.zeros([x+2 for x in int_image.shape], int_image.dtype)
+    larger_image[1:-1, 1:-1] = int_image
+    return cv2.findContours(larger_image, 
                             cv2.RETR_LIST, 
                             cv2.CHAIN_APPROX_SIMPLE)[0]
 
 def _compute_perimeter(result):
-    return sum(cv2.arcLength(c, True) for c in _compute_contours(result))\
+    return sum(cv2.arcLength(c, True) for c in 
+               _compute_contours(result.int_image))\
            /float(result.spec.width)
 perimeter = Field(func=_compute_perimeter, path="perimeter")
 
@@ -321,7 +382,7 @@ x_correlations = VariableField(func=_compute_x_correlations,
 
 def _compute_convex_hull_area(result):
     area = 0.0
-    for contour in _compute_contours(result):
+    for contour in _compute_contours(result.int_image):
         try:
             hull = cv2.convexHull(contour, returnPoints=True)
             area += cv2.contourArea(hull)
@@ -331,10 +392,19 @@ def _compute_convex_hull_area(result):
 convex_hull_area = Field(func=_compute_convex_hull_area,
                          path="convex_hull_area")
 
+
 def _compute_convex_density(result):
     area = float(convex_hull_area.get_by_result(result))
-    return 0.0 if area <= 1.0 else mass.get_by_result(result)/area
+    if area <= 1.0:
+        return 0.0 
+    else:
+        return min(1.0, mass.get_by_result(result)/area)
 convex_density = Field(func=_compute_convex_density, path="convex_density")
+
+def _compute_density(result):
+    area = float(result.spec.width*heights.get_by_result(result).max())
+    return 0.0 if area <= 1.0 else mass.get_by_result(result)/area
+density = Field(func=_compute_density, path="density")
 
 def _compute_mass(result):
     return result.mass.max()

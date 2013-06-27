@@ -30,11 +30,112 @@ def make_diffusion_data():
             print j,
             result = models.compute_probabilistic(spec)
             result.save()
-        analysis.coverages.compute_by_spec(spec)
 
     print "Done!"
 
 def do_diffusion_plots():
+    import utils; utils.DEFAULT_H5_FILE = "diffusion3.h5"
+    import specs, models, analysis
+
+    for boundary in [5, 10]:
+        query = specs.make_query(boundary_layer='==%s'%boundary)
+
+        plt.clf()
+        analysis.heights.phase_diagram_2d(
+            'diffusion_constant', 'uptake_rate',
+            spec_query=query, num_cells=40, statistic='max',
+            cmap=plt.get_cmap('hot'), vmin=0, vmax=35)
+        save_plot(path='diffusion/heights/max/boundary{0}'.format(boundary),
+                  xlabel='Diffusion Constant',
+                  ylabel='Uptake Rate')
+
+        plt.clf()
+        analysis.heights.phase_diagram_2d(
+            'diffusion_constant', 'uptake_rate',
+            spec_query=query, num_cells=40, statistic='mean',
+            cmap=plt.get_cmap('hot'), vmin=0, vmax=30)
+        save_plot(path='diffusion/heights/mean/boundary{0}'.format(boundary),
+                  xlabel='Diffusion Constant',
+                  ylabel='Uptake Rate')
+
+        plt.clf()
+        #levels = [0.6, 0.7, 0.8, 0.9, 1.0]
+        #analysis.convex_density.contour_plot(
+        #    'diffusion_constant', 'uptake_rate', levels=levels,
+        #    spec_query=query, num_cells=100, statistic='mean',
+        #    smoothing=0.5, cmap=plt.get_cmap('hot'), vmin=0.0, vmax=1.0)
+        analysis.convex_density.phase_diagram_2d(
+            'diffusion_constant', 'uptake_rate', 
+            spec_query=query, num_cells=40, statistic='mean',
+            cmap=plt.get_cmap('hot'), vmax=1.0)
+        save_plot(path='diffusion/convex_density/boundary{0}'.format(boundary),
+                  xlabel='Diffusion Constant',
+                  ylabel='Uptake Rate')
+
+
+def find_diffusion_line():
+    import utils; utils.DEFAULT_H5_FILE = "diffusion3.h5"
+    import specs, models, analysis
+    import random
+
+    # boundary = 5
+    # slope = 4.40
+    # query = '(boundary_layer=={0})&(uptake_rate >= {1}*diffusion_constant)'\
+    #         .format(boundary, slope)
+
+    # high_growth = [models.Result.where('spec_uuid=="%s"'%spec.uuid)
+    #                for spec in specs.Spec.where(query)
+    #                if analysis.convex_density.get_by_spec(spec)['mean'] < 0.9]
+    # print len(high_growth)
+
+    # for result_set in high_growth:
+    #     result = random.choice(list(result_set))
+    #     spec = result.spec
+    #     path = "fig/images/weird/b{0}_ur{1}_d{2}.png"\
+    #            .format(boundary, spec.uptake_rate, spec.diffusion_constant)
+    #     cv2.imwrite(path, result.int_image*255)
+
+    boundary = 5
+    query = specs.make_query(boundary_layer='==%s'%boundary,
+                             uptake_rate=('>0.49', '<0.52'),
+                             diffusion_constant='<0.25')
+    line = [models.Result.where('spec_uuid=="%s"'%spec.uuid)
+            for spec in sorted(specs.Spec.where(query), 
+                               key=lambda s:s.diffusion_constant)]
+
+    for i, result_set in enumerate(line):
+        result = random.choice(list(result_set))
+        spec = result.spec
+        path = "fig/images/weird/{0}_b{1}_ur{2}_d{3}.png"\
+               .format(i, boundary, spec.uptake_rate, spec.diffusion_constant)
+        cv2.imwrite(path, result.int_image*255)
+
+def make_diffusion_line():
+    import utils; utils.DEFAULT_H5_FILE = "diffusion_line3.h5"
+    import specs, models, analysis
+
+    builder = specs.SpecBuilder()
+    builder.add("boundary_layer", 10)
+    builder.add("stop_on_no_growth", 300)
+    builder.add("stop_on_time", 20000)
+    builder.add("stop_on_mass", 2000)
+    builder.add("light_penetration", 0)
+    builder.add("diffusion_constant", *np.linspace(0.01, 0.25, 100))
+    builder.add("uptake_rate", 0.5)
+    builder.add("height", 40)
+    builder.add("initial_cell_spacing", 16)
+    print builder.num_specs
+    #builder.build()
+
+    for i, spec in enumerate(specs.Spec.all()):
+        print i
+        models.compute_probabilistic(spec).save()
+        analysis.heights.compute_by_spec(spec)
+
+    print "Done!"
+
+
+def do_diffusion_plots_old():
     import utils; utils.DEFAULT_H5_FILE = "data.h5"
     import specs, models, analysis
 
@@ -116,16 +217,22 @@ def make_coverage_data2():
     print "Done!"
 
 def do_coverage_plots():
-    import utils; utils.DEFAULT_H5_FILE = "new_coverages.h5"
+    import utils; utils.DEFAULT_H5_FILE = "coverages.h5"
     import specs, models, analysis
 
-    plt.clf()
-    for light in [0, 4, 8, 16]:
-        query = specs.make_query(stop_on_mass='==2500', light_penetration='==%s'%light)
-        analysis.coverages.average_curve_plot(spec_query=query, lw=3, 
-                label='Light Penetration Depth = %s'%light)
-    plt.legend()
-    save_plot(path='coverages/average_test', xlabel='Depth', ylabel='Coverage')
+    for mass in [500, 1000, 1500, 2000, 2500]:
+        for spacing in [1, 2, 4, 6, 8, 10, 16, 24, 32, 64, 128]:
+            plt.clf()
+
+            for light in [0, 8, 16]:
+                query = specs.make_query(initial_cell_spacing='==%s'%spacing, 
+                                         stop_on_mass='==%s'%mass, 
+                                         light_penetration='==%s'%light)
+                analysis.coverages.average_curve_plot(spec_query=query, lw=3, 
+                        label='Light Penetration Depth = %s'%light)
+            plt.legend()
+            save_plot(path='coverages/mass%s_spacing%s'%(mass, spacing), 
+                      xlabel='Depth', ylabel='Coverage')
 
 
 def make_biomass_vs_light_data():
@@ -250,7 +357,7 @@ def do_biomass_vs_light_plots():
     #print "p-value", sum(1 for d in percent_diffs if d > real_diff)/float(len(percent_diffs))
 
 def do_biomass_vs_light_plots_spaced():
-    import utils; utils.DEFAULT_H5_FILE = "new_growth_data_spaced.h5"
+    import utils; utils.DEFAULT_H5_FILE = "biomass.h5"
     import specs, models, analysis
     from numpy.random import randint
 

@@ -11,9 +11,9 @@ from itertools import product
 
 DEFAULT_PARAMETERS = {
     'stop_on_mass': 4000,
-    'stop_on_time': 20000,
+    'stop_on_time': 30000,
     'stop_on_height': 64,
-    'stop_on_no_growth': 300,
+    'stop_on_no_growth': 500,
     'width': 128,
     'height': 64,
     'block_size': 11,

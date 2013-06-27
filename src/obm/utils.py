@@ -173,9 +173,14 @@ class TableObject(object):
     @classmethod
     def setup_table(cls, node, description, 
                     filters=tb.Filters(complib='blosc', complevel=1),
-                    sorted_indices=['uuid']):
+                    sorted_indices=['uuid'],
+                    **table_args):
         cls.table = QuickTable(node, description, filters=filters, 
-                               sorted_indices=sorted_indices)
+                               sorted_indices=sorted_indices, **table_args)
+
+    @classmethod
+    def flush(cls):
+        cls.table.flush()
 
     @classmethod
     def _lookup_by_uuid(cls, uuid):
@@ -270,3 +275,9 @@ def make_variable_data(name, column_func, **table_args):
         return get_table(data.shape)(uuid=uuid, data=data).save()
     def delete(uuid, shape): return get_table(shape)(uuid=uuid).delete()
     return get, save, delete
+
+def compute_heights(image):
+    heights = np.zeros(image.shape[1], dtype=int)
+    for row in reversed(range(image.shape[0])):
+        heights[np.logical_and((heights == 0), image[row, :])] = row
+    return heights
