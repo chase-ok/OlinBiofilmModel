@@ -1,7 +1,7 @@
+#!/usr/bin/env python
 
 from obm import specs, models, utils
 from obm.compute import common
-from BaseHTTPServer import *
 import threading
 import random
 import os

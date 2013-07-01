@@ -298,12 +298,6 @@ class CellularAutomataModel(Model):
                 check_interval += check_interval_growth
 
         self.media = media
-        if self.time % 5000 == 0:
-            from matplotlib import pyplot as plt
-            plt.clf()
-            plt.imshow(media)
-            plt.colorbar()
-            plt.savefig("diffusion{0}.png".format(self.time))
 
     def _narrow_cells(self):
         # it turns out boundary_layer is half of what its defined as, due to

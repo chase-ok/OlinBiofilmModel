@@ -111,7 +111,7 @@ def find_diffusion_line():
         cv2.imwrite(path, result.int_image*255)
 
 def make_diffusion_line():
-    import utils; utils.DEFAULT_H5_FILE = "diffusion_line3.h5"
+    import utils; utils.DEFAULT_H5_FILE = "diffusion_line.h5"
     import specs, models, analysis
 
     builder = specs.SpecBuilder()
@@ -120,12 +120,12 @@ def make_diffusion_line():
     builder.add("stop_on_time", 20000)
     builder.add("stop_on_mass", 2000)
     builder.add("light_penetration", 0)
-    builder.add("diffusion_constant", *np.linspace(0.01, 0.25, 100))
+    builder.add("diffusion_constant", *np.linspace(0.001, 0.25, 30))
     builder.add("uptake_rate", 0.5)
     builder.add("height", 40)
     builder.add("initial_cell_spacing", 16)
     print builder.num_specs
-    #builder.build()
+    builder.build()
 
     for i, spec in enumerate(specs.Spec.all()):
         print i
