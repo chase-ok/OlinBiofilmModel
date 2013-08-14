@@ -34,18 +34,18 @@ def make_diffusion_data():
     print "Done!"
 
 def do_diffusion_plots():
-    import utils; utils.DEFAULT_H5_FILE = "diffusion3.h5"
+    import utils; utils.DEFAULT_H5_FILE = "diffusion.h5"
     import specs, models, analysis
 
-    for boundary in [5, 10]:
-        query = specs.make_query(boundary_layer='==%s'%boundary)
+    for light in [0, 8]:
+        query = specs.make_query(light_penetration='==%s'%light)
 
         plt.clf()
         analysis.heights.phase_diagram_2d(
             'diffusion_constant', 'uptake_rate',
             spec_query=query, num_cells=40, statistic='max',
-            cmap=plt.get_cmap('hot'), vmin=0, vmax=35)
-        save_plot(path='diffusion/heights/max/boundary{0}'.format(boundary),
+            cmap=plt.get_cmap('hot'), vmin=5, vmax=35)
+        save_plot(path='diffusion/heights/max/light{0}'.format(light),
                   xlabel='Diffusion Constant',
                   ylabel='Uptake Rate')
 
@@ -53,8 +53,8 @@ def do_diffusion_plots():
         analysis.heights.phase_diagram_2d(
             'diffusion_constant', 'uptake_rate',
             spec_query=query, num_cells=40, statistic='mean',
-            cmap=plt.get_cmap('hot'), vmin=0, vmax=30)
-        save_plot(path='diffusion/heights/mean/boundary{0}'.format(boundary),
+            cmap=plt.get_cmap('hot'), vmin=5, vmax=18)
+        save_plot(path='diffusion/heights/mean/light{0}'.format(light),
                   xlabel='Diffusion Constant',
                   ylabel='Uptake Rate')
 
@@ -67,10 +67,20 @@ def do_diffusion_plots():
         analysis.convex_density.phase_diagram_2d(
             'diffusion_constant', 'uptake_rate', 
             spec_query=query, num_cells=40, statistic='mean',
-            cmap=plt.get_cmap('hot'), vmax=1.0)
-        save_plot(path='diffusion/convex_density/boundary{0}'.format(boundary),
+            cmap=plt.get_cmap('hot'), vmin=0.6, vmax=1.0)
+        save_plot(path='diffusion/convex_density/light{0}'.format(light),
                   xlabel='Diffusion Constant',
                   ylabel='Uptake Rate')
+
+def finish_up_diffusion(n=1):
+    import utils; utils.DEFAULT_H5_FILE = "diffusion.h5"
+    import specs, models
+
+    for i, spec in enumerate(specs.Spec.all()):
+        num_results = len(list(models.Result.table.raw.where("spec_uuid=='{0}'".format(spec.uuid))))
+        print i, num_results
+        if num_results < n:
+            models.compute_probabilistic(spec).save()
 
 
 def find_diffusion_line():
